@@ -1,0 +1,11 @@
+/target/
+*.o
+*.exe
+*.zip
+*.segments
+*.segments.tmp
+*.segments.bak
+test_*
+!test_source.bin
+.DS_Store
+Thumbs.db
