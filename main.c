@@ -581,13 +581,13 @@ static void parse_args(options_t* opts, int argc, char** argv) {
             if (opts->connections < 1) opts->connections = 1;
             if (opts->connections > 32) opts->connections = 32;
         }
-        else if ((strcmp(argv[i], "-U") == 0 || strcmp(argv[i], "--user-agent") == 0) && i+1 < argc) {
+        else if ((strcmp(argv[i], "-ua") == 0 || strcmp(argv[i], "--user-agent") == 0) && i+1 < argc) {
             strncpy(opts->user_agent, argv[++i], sizeof(opts->user_agent) - 1);
         }
         else if (strcmp(argv[i], "--referer") == 0 && i+1 < argc) {
             strncpy(opts->referer, argv[++i], sizeof(opts->referer) - 1);
         }
-        else if ((strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--progress") == 0) && i+1 < argc) {
+        else if ((strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "-progress") == 0) && i+1 < argc) {
             i++;
             if (strcmp(argv[i], "bar") == 0) opts->progress_mode = PROGRESS_BAR;
             else if (strcmp(argv[i], "json") == 0) opts->progress_mode = PROGRESS_JSON;
@@ -599,11 +599,11 @@ static void parse_args(options_t* opts, int argc, char** argv) {
             if (opts->extra_count < 32)
                 opts->extra_headers[opts->extra_count++] = _strdup(argv[++i]);
         }
-        else if (strcmp(argv[i], "--timeout") == 0 && i+1 < argc) {
+        else if (strcmp(argv[i], "-timeout") == 0 && i+1 < argc) {
             opts->timeout_sec = atoi(argv[++i]);
             if (opts->timeout_sec < 1) opts->timeout_sec = 1;
         }
-        else if (strcmp(argv[i], "--retry") == 0 && i+1 < argc) {
+        else if (strcmp(argv[i], "-retries") == 0 && i+1 < argc) {
             opts->max_retries = atoi(argv[++i]);
             if (opts->max_retries < 0) opts->max_retries = 0;
         }
@@ -625,12 +625,12 @@ static void print_help(void) {
     printf("  -d, --dir <DIR>           输出目录\n");
     printf("  -c, --connections <N>     并发连接数 (默认 %d, 1-32)\n", DEFAULT_CONNECTIONS);
     printf("  -q, --quiet               安静模式\n");
-    printf("  -p, --progress <FORMAT>   进度: bar|json|none\n");
-    printf("  -U, --user-agent <UA>     自定义 UA\n");
+    printf("  -p, -progress <FORMAT>    进度: bar|json|none\n");
+    printf("  -ua, --user-agent <UA>    自定义 UA\n");
     printf("      --referer <URL>       Referer\n");
     printf("      --header <K:V>        自定义请求头 (可多次)\n");
-    printf("      --timeout <SEC>       超时 (默认 %d)\n", DEFAULT_TIMEOUT);
-    printf("      --retry <N>           重试 (默认 %d)\n", DEFAULT_RETRY);
+    printf("      -timeout <SEC>        超时 (默认 %d)\n", DEFAULT_TIMEOUT);
+    printf("      -retries <N>          重试 (默认 %d)\n", DEFAULT_RETRY);
     printf("  -h, --help                帮助\n");
     printf("  -V, --version             版本\n\n");
     printf("Examples:\n");
