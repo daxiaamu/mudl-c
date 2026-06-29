@@ -618,8 +618,8 @@ static void parse_args(options_t* opts, int argc, char** argv) {
 }
 
 static void print_help(void) {
-    printf("MUDL v%s - Multi-threaded Universal Downloader (MUDL)\n", VERSION);
-    printf("Usage: mudm [options] <URL>\n\n");
+    printf("MUDL v%s - Multi-threaded Universal Downloader\n", VERSION);
+    printf("Usage: mudl [options] <URL>\n\n");
     printf("Options:\n");
     printf("  -o, --output <FILE>       输出文件名\n");
     printf("  -d, --dir <DIR>           输出目录\n");
@@ -634,9 +634,9 @@ static void print_help(void) {
     printf("  -h, --help                帮助\n");
     printf("  -V, --version             版本\n\n");
     printf("Examples:\n");
-    printf("  mudm https://example.com/file.zip\n");
-    printf("  mudm -c 8 https://example.com/large.iso\n");
-    printf("  mudm -q -p json https://example.com/file.bin\n");
+    printf("  mudl https://example.com/file.zip\n");
+    printf("  mudl -c 8 https://example.com/large.iso\n");
+    printf("  mudl -q -p json https://example.com/file.bin\n");
 }
 
 static void print_version(void) {
