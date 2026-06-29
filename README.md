@@ -2,17 +2,15 @@
 
 > **Multi-threaded Universal Downloader in C** — 113KB single .exe, zero external dependencies.
 
-Based on reverse engineering of [Neat Download Manager](https://www.neatdownloadmanager.com/) v1.4.24's dynamic multi-threading algorithm.
-
 ## Features
 
 | Feature | Description |
 |---------|-------------|
 | ⚡ **Multi-thread** | Parallel segmented downloads, up to 32 connections |
 | 🔄 **Segment RollBack** | Work-stealing: fast threads auto-steal from slow ones |
-| ▶️ **Resume** | Both single & multi-thread. Survives URL changes (e.g. expired OSS tokens) |
+| ▶️ **Resume** | Both single & multi-thread. Survives URL changes |
 | 🔒 **SChannel SSL** | Native Windows TLS (TLS 1.2/1.3), no OpenSSL needed |
-| ☁️ **OSS signed URLs** | Compatible with Alibaba Cloud OSS / CDN time-limited signed URLs |
+| ☁️ **Signed URLs** | Compatible with cloud CDN time-limited signed URLs |
 | 📦 **Single binary** | Statically linked MinGW-w64, runs on any Windows (Vista+) |
 | 📊 **Progress** | Bar mode with ETA, or JSON output for scripting |
 
@@ -28,10 +26,10 @@ mudl -c 16 -o output.zip "https://example.com/file.iso" # 16 threads + rename
 
 ```bash
 # First run (Ctrl+C to pause):
-mudl -c 8 "https://oss-signed-url?token=abc"
+mudl -c 8 "https://example.com/file.zip"
 
-# URL expired? Get a new one, resume automatically:
-mudl -c 8 "https://oss-signed-url?token=xyz"
+# URL changed? Update the URL, resume automatically:
+mudl -c 8 "https://cdn.example.com/file.zip?token=abc"
 ```
 
 Works as long as the new URL points to the **same file** (same Content-Length). Progress saved every 3 seconds.
@@ -72,32 +70,6 @@ strip mudl.exe
       --retry <N>           Max retries per segment (default 5)
   -h, --help                Show this help
   -V, --version             Show version
-```
-
-## Size comparison
-
-| Downloader | Size | Dependencies |
-|-----------|------|-------------|
-| **MUDL** | **113 KB** | **None — single .exe** |
-| NDM | 1.7 MB | .NET Runtime + DLLs |
-| IDM | 15 MB | Browser extensions |
-| aria2c | 5 MB | libcrypto, libssl, etc. |
-| curl | 3 MB | OpenSSL DLL |
-
-## Architecture
-
-```
-┌─ Download Engine ───────────────────────────┐
-│  ┌─ Segment Manager ─────────────────────┐  │
-│  │  ┌─ Segment[0] ←── Worker Thread 0 ─┐ │  │
-│  │  ├─ Segment[1] ←── Worker Thread 1 ─┤ │  │
-│  │  ├─ Segment[2] ←── Worker Thread 2 ─┤ │  │
-│  │  └─ Segment[N] ←── Worker Thread N ─┘ │  │
-│  │  RollBack: fast workers steal work     │  │
-│  │  from slow workers (NDM algorithm)     │  │
-│  └────────────────────────────────────────┘  │
-│  Persist: segments.bin for resume support    │
-└──────────────────────────────────────────────┘
 ```
 
 ## Project structure

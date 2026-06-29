@@ -247,7 +247,7 @@ static int download_single(options_t* opts, const char* outpath,
     }
 
     http_response_t get_resp;
-    /* Send Range: bytes=POS- like NDM does (POS=0 or resume position).
+    /* Send Range: bytes=POS- (POS=0 or resume position).
        If server supports Range, it returns 206 + Content-Range with file size.
        If not, it returns 200 with full content. */
     char range_start[32];
@@ -642,7 +642,6 @@ static void print_help(void) {
 static void print_version(void) {
     printf("MUDL v%s\n", VERSION);
     printf("Multi-threaded Universal Downloader (MUDL)\n");
-    printf("Based on NDM dynamic multi-threading algorithm\n");
 }
 
 static void sig_handler(int sig) {

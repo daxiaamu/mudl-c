@@ -5,7 +5,7 @@
 #include <string.h>
 #include <windows.h>
 
-/* On-disk segment entry (40 bytes, same as NDM's segments.bin style) */
+/* On-disk segment entry (40 bytes each) */
 #pragma pack(push, 1)
 typedef struct {
     uint32_t magic;         /* PERSIST_MAGIC */
