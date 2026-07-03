@@ -27,6 +27,7 @@ typedef struct {
     int      socket_fd;         /* owning thread id / socket */
     int64_t  speed_bps;
     uint64_t last_activity_ms;
+    uint32_t crc32;
 } segment_t;
 
 typedef struct {
@@ -75,6 +76,8 @@ int64_t segmgr_total_downloaded(segment_manager_t* mgr);
 
 /* Get total bytes remaining */
 int64_t segmgr_total_remaining(segment_manager_t* mgr);
+/* Check whether any segment has permanently failed */
+bool segmgr_has_error(segment_manager_t* mgr);
 /* Get speeds of all active segments (for dynamic adjustment) */
 int segmgr_get_active_speeds(segment_manager_t* mgr, int64_t* speeds, int max_count);
 

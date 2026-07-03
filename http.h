@@ -12,7 +12,10 @@
 #include <sspi.h>
 
 #define HTTP_BUF_SIZE 65536
-#define HTTP_MAX_HEADERS 4096
+#define HTTP_MAX_HEADERS 16384
+#define HTTP_MAX_URL 8192
+#define HTTP_MAX_PATH 8192
+#define HTTP_MAX_HEADER_LINE 8192
 
 #define HTTP_OK               200
 #define HTTP_PARTIAL_CONTENT  206
@@ -31,7 +34,7 @@ typedef struct {
     int64_t     content_range_end;
     int64_t     content_range_total;
     bool        accept_ranges;
-    char        location[1024];
+    char        location[HTTP_MAX_URL];
     char        content_type[128];
     char        headers[HTTP_MAX_HEADERS];
     bool        is_chunked;

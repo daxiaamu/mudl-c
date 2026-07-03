@@ -20,8 +20,12 @@
 #define DEFAULT_RETRY 5
 #define BUF_SIZE 65536
 
+#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
+#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
+#endif
+
 typedef struct {
-    char        url[2048];
+    char        url[HTTP_MAX_URL];
     char        output[256];
     char        dir[MAX_PATH];
     int         connections;
@@ -62,11 +66,11 @@ static void init_console(void) {
 
 /* Single-thread fallback */
 static int download_single(options_t* opts, const char* outpath,
-                           const char* path, int64_t file_size);
+                           char* path, int64_t file_size);
 
 /* Multi-thread download */
 static int download_multi(options_t* opts, const char* outpath,
-                          const char* path, int64_t file_size);
+                          const char* path, int64_t total_size);
 
 
 /* Speed tracker */
@@ -123,7 +127,7 @@ int main(int argc, char** argv) {
     printf("Output:  %s\n", outpath);
     printf("Threads: %d\n\n", opts.connections);
 
-    char scheme[16], host[256], path[2048];
+    char scheme[16], host[256], path[HTTP_MAX_PATH];
     int port;
     http_parse_url(opts.url, scheme, sizeof(scheme),
                    host, sizeof(host), &port, path, sizeof(path));
@@ -155,17 +159,17 @@ int main(int argc, char** argv) {
             printf("Redirect %d: %s\n", redirect_count, probe_resp.location);
             http_close(&probe);
 
-            strncpy((char*)opts.url, probe_resp.location, sizeof(opts.url) - 1);
+            snprintf(opts.url, sizeof(opts.url), "%s", probe_resp.location);
             if (http_connect(&probe, opts.url) != 0) break;
 
-            char scheme[16], host[256], path_new[2048];
+            char scheme[16], host[256], path_new[HTTP_MAX_PATH];
             int port;
             http_parse_url(opts.url, scheme, sizeof(scheme),
                            host, sizeof(host), &port, path_new, sizeof(path_new));
-            strncpy(path, path_new, 2048);
+            snprintf(path, sizeof(path), "%s", path_new);
 
             r = http_request(&probe, HTTP_GET, path,
-                             NULL, NULL,   /* no Range on redirected request */
+                             "0-", NULL,
                              opts.user_agent, opts.referer,
                              (const char**)opts.extra_headers, opts.extra_count,
                              &probe_resp);
@@ -200,24 +204,27 @@ int main(int argc, char** argv) {
 
 /* ===== Single-thread fallback ===== */
 static int download_single(options_t* opts, const char* outpath,
-                           const char* path, int64_t file_size) {
+                           char* path, int64_t file_size) {
     /* Check for resume (segments.bin) */
     char segpath[MAX_PATH * 2];
     persist_path(outpath, segpath, sizeof(segpath));
     int64_t resume_pos = 0;
+    uint32_t resume_crc32 = 0;
     bool resumed = false;
     if (file_size > 0 && persist_exists(segpath)) {
         segment_manager_t tmp_mgr;
         memset(&tmp_mgr, 0, sizeof(tmp_mgr));
         if (persist_load(segpath, &tmp_mgr, file_size, NULL) == 0 && tmp_mgr.segment_count > 0) {
             resume_pos = tmp_mgr.segments[0].downloaded;
+            resume_crc32 = tmp_mgr.segments[0].crc32;
             printf("Resuming at byte %lld (%.1f%%)\n",
                    (long long)resume_pos,
                    (double)resume_pos / file_size * 100.0);
             segmgr_destroy(&tmp_mgr);
             resumed = true;
         } else {
-            segmgr_destroy(&tmp_mgr);
+            if (tmp_mgr.segments || tmp_mgr.pending_queue)
+                segmgr_destroy(&tmp_mgr);
         }
     }
 
@@ -251,7 +258,7 @@ static int download_single(options_t* opts, const char* outpath,
        If server supports Range, it returns 206 + Content-Range with file size.
        If not, it returns 200 with full content. */
     char range_start[32];
-    _snprintf(range_start, sizeof(range_start), "%lld", (long long)resume_pos);
+    snprintf(range_start, sizeof(range_start), "%lld", (long long)resume_pos);
     int r = http_request(&cli, HTTP_GET, path,
                          resume_pos > 0 ? range_start : "0-", NULL,
                          opts->user_agent, opts->referer,
@@ -268,20 +275,21 @@ static int download_single(options_t* opts, const char* outpath,
         http_close(&cli);
 
         /* Update URL and reconnect */
-        strncpy((char*)opts->url, get_resp.location, sizeof(opts->url) - 1);
+        snprintf(opts->url, sizeof(opts->url), "%s", get_resp.location);
         if (http_connect(&cli, opts->url) != 0) {
             fprintf(stderr, "Redirect error: %s\n", cli.last_error);
             file_close(&f);
             return 2;
         }
         /* Update path */
-        char scheme[16], host[256], path_new[2048];
+        char scheme[16], host[256], path_new[HTTP_MAX_PATH];
         int port;
         http_parse_url(opts->url, scheme, sizeof(scheme),
                        host, sizeof(host), &port, path_new, sizeof(path_new));
-        strncpy(path, path_new, 2048);
+        snprintf(path, HTTP_MAX_PATH, "%s", path_new);
 
-        r = http_request(&cli, HTTP_GET, path, NULL, NULL,
+        r = http_request(&cli, HTTP_GET, path,
+                         resume_pos > 0 ? range_start : "0-", NULL,
                          opts->user_agent, opts->referer,
                          (const char**)opts->extra_headers, opts->extra_count,
                          &get_resp);
@@ -297,20 +305,27 @@ static int download_single(options_t* opts, const char* outpath,
     char* buf = (char*)malloc(BUF_SIZE);
     if (!buf) { file_close(&f); http_close(&cli); return 1; }
 
-    int64_t total = 0;
+    int64_t downloaded = resume_pos;
+    uint32_t download_crc32 = resume_crc32;
+    bool download_error = false;
     speed_tracker_t st;
     speed_init(&st);
     uint64_t last_save_ms = GetTickCount64();
 
     while (!g_interrupted) {
         int bytes = http_read_body(&cli, buf, BUF_SIZE);
-        if (bytes < 0) { fprintf(stderr, "\nError: %s\n", cli.last_error); break; }
+        if (bytes < 0) {
+            fprintf(stderr, "\nError: %s\n", cli.last_error);
+            download_error = true;
+            break;
+        }
         if (bytes == 0) break;
 
         file_write(&f, buf, bytes);
-        total += bytes;
-        speed_tick(&st, total);
-        progress_update(&prog, total, st.speed, 1, 1);
+        download_crc32 = crc32_update(download_crc32, buf, bytes);
+        downloaded += bytes;
+        speed_tick(&st, downloaded);
+        progress_update(&prog, downloaded, st.speed, 1, 1);
 
         /* Periodic save for resume (every 10s) */
         if (file_size > 0) {
@@ -326,9 +341,12 @@ static int download_single(options_t* opts, const char* outpath,
                     save_mgr.segments[0].index = 0;
                     save_mgr.segments[0].start_offset = 0;
                     save_mgr.segments[0].end_offset = file_size - 1;
-                    save_mgr.segments[0].downloaded = total;
+                    save_mgr.segments[0].downloaded = downloaded;
                     save_mgr.segments[0].state = SEG_DOWNLOADING;
+                    save_mgr.segments[0].crc32 = download_crc32;
+                    InitializeCriticalSection(&save_mgr.lock);
                     persist_save(segpath, &save_mgr, file_size, 1);
+                    DeleteCriticalSection(&save_mgr.lock);
                     free(save_mgr.segments);
                 }
                 last_save_ms = now;
@@ -337,14 +355,14 @@ static int download_single(options_t* opts, const char* outpath,
     }
 
     free(buf);
-    progress_update(&prog, total, st.speed, 1, 1);
+    progress_update(&prog, downloaded, st.speed, 1, 1);
     progress_done(&prog);
     file_close(&f);
     http_close(&cli);
 
     if (g_interrupted) {
         /* Save state for resume on Ctrl+C */
-        if (file_size > 0 && total > 0) {
+        if (file_size > 0 && downloaded > 0) {
             segment_manager_t save_mgr;
             memset(&save_mgr, 0, sizeof(save_mgr));
             save_mgr.segment_count = 1;
@@ -355,9 +373,12 @@ static int download_single(options_t* opts, const char* outpath,
                 save_mgr.segments[0].index = 0;
                 save_mgr.segments[0].start_offset = 0;
                 save_mgr.segments[0].end_offset = file_size - 1;
-                save_mgr.segments[0].downloaded = total;
+                save_mgr.segments[0].downloaded = downloaded;
                 save_mgr.segments[0].state = SEG_DOWNLOADING;
+                save_mgr.segments[0].crc32 = download_crc32;
+                InitializeCriticalSection(&save_mgr.lock);
                 persist_save(segpath, &save_mgr, file_size, 1);
+                DeleteCriticalSection(&save_mgr.lock);
                 free(save_mgr.segments);
             }
         }
@@ -365,15 +386,46 @@ static int download_single(options_t* opts, const char* outpath,
         return 4;
     }
 
+    if (download_error) {
+        return 2;
+    }
+
+    if (file_size > 0 && downloaded != file_size) {
+        fprintf(stderr,
+                "\nError: incomplete download (%lld/%lld bytes). Resume file kept.\n",
+                (long long)downloaded, (long long)file_size);
+        segment_manager_t save_mgr;
+        memset(&save_mgr, 0, sizeof(save_mgr));
+        save_mgr.segment_count = 1;
+        save_mgr.complete_count = 0;
+        save_mgr.file_size = file_size;
+        save_mgr.segments = (segment_t*)calloc(1, sizeof(segment_t));
+        if (save_mgr.segments) {
+            save_mgr.segments[0].index = 0;
+            save_mgr.segments[0].start_offset = 0;
+            save_mgr.segments[0].end_offset = file_size - 1;
+            save_mgr.segments[0].downloaded = downloaded;
+            save_mgr.segments[0].state = SEG_DOWNLOADING;
+            save_mgr.segments[0].crc32 = download_crc32;
+            InitializeCriticalSection(&save_mgr.lock);
+            persist_save(segpath, &save_mgr, file_size, 1);
+            DeleteCriticalSection(&save_mgr.lock);
+            free(save_mgr.segments);
+        }
+        return 3;
+    }
+
     /* Remove resume file on clean completion */
     if (file_size > 0) persist_remove(segpath);
-    printf("\nDone.\n");
+    if (opts->progress_mode == PROGRESS_BAR) {
+        printf("DONE: %s (%lld bytes)\n", outpath, (long long)downloaded);
+    }
     return 0;
 }
 
 /* ===== Multi-thread download ===== */
 static int download_multi(options_t* opts, const char* outpath,
-                          const char* path, int64_t file_size) {
+                          const char* path, int64_t total_size) {
     int conn = opts->connections;
     printf("Method:  multi-thread (%d connections)\n\n", conn);
 
@@ -386,20 +438,27 @@ static int download_multi(options_t* opts, const char* outpath,
     bool resumed = false;
     if (persist_exists(segpath)) {
         trace("Resume file found: %s", segpath);
-        memset(&segmgr, 0, sizeof(segmgr));
-        if (persist_load(segpath, &segmgr, file_size, NULL) == 0) {
-            printf("Resuming from segments.bin (%d segments, %lld pending)\n",
-                   segmgr.segment_count,
-                   (long long)(segmgr.segment_count - segmgr.complete_count));
-            resumed = true;
+        int64_t existing_size = file_size(outpath);
+        if (existing_size < 0) {
+            printf("Resume state ignored: output file is missing\n");
+        } else if (existing_size < total_size) {
+            printf("Resume state ignored: output file is smaller than expected\n");
         } else {
-            trace("Resume file invalid, starting fresh");
+            memset(&segmgr, 0, sizeof(segmgr));
+            if (persist_load(segpath, &segmgr, total_size, NULL) == 0) {
+                printf("Resuming from segments.bin (%d segments, %lld pending)\n",
+                       segmgr.segment_count,
+                       (long long)(segmgr.segment_count - segmgr.complete_count));
+                resumed = true;
+            } else {
+                trace("Resume file invalid, starting fresh");
+            }
         }
     }
 
     if (!resumed) {
         /* Fresh start */
-        if (segmgr_init(&segmgr, file_size, conn) != 0) {
+        if (segmgr_init(&segmgr, total_size, conn) != 0) {
             fprintf(stderr, "Error: failed to init segment manager\n");
             return 1;
         }
@@ -408,7 +467,7 @@ static int download_multi(options_t* opts, const char* outpath,
 
     /* Open output file (must exist for resume) */
     file_t output_file;
-    if (file_open(&output_file, outpath, file_size) != 0) {
+    if (file_open(&output_file, outpath, total_size) != 0) {
         fprintf(stderr, "Error: %s\n", output_file.last_error);
         segmgr_destroy(&segmgr);
         return 1;
@@ -446,31 +505,19 @@ static int download_multi(options_t* opts, const char* outpath,
 
     printf("Started %d workers\n", actual_count);
 
-    /* Engine monitor thread state */
-    volatile bool engine_running = true;
-    engine_ctx_t eng_ctx;
-    eng_ctx.segmgr = &segmgr;
-    eng_ctx.opts = opts;
-    eng_ctx.speed_tracker = &st;
-    eng_ctx.running = &engine_running;
-    HANDLE engine_thread = CreateThread(NULL, 0, engine_monitor_thread,
-                                         &eng_ctx, 0, NULL);
-
     /* Progress / monitor loop */
     progress_t prog;
-    progress_init(&prog, opts->progress_mode, file_size, actual_count);
-
-    int last_active_count = actual_count;
+    progress_init(&prog, opts->progress_mode, total_size, actual_count);
 
     uint64_t last_save_ms = GetTickCount64();
 
-    while (!segmgr_all_done(&segmgr) && !g_interrupted) {
+    while (!segmgr_all_done(&segmgr) && !g_interrupted && !segmgr_has_error(&segmgr)) {
         Sleep(500);
 
         /* Periodic save every 5 seconds */
         uint64_t now = GetTickCount64();
         if (now - last_save_ms >= 5000) {
-            persist_save(segpath, &segmgr, file_size, conn);
+            persist_save(segpath, &segmgr, total_size, conn);
             last_save_ms = now;
         }
 
@@ -482,37 +529,39 @@ static int download_multi(options_t* opts, const char* outpath,
         active = segmgr.active_count;
         LeaveCriticalSection(&segmgr.lock);
 
-        /* Detect if we changed thread count (upgrade/degrade) and update */
-        if (active != last_active_count) {
-            progress_log(&prog, active > last_active_count
-                ? "Engine: upgraded - more threads spawned"
-                : "Engine: degraded - slow thread suspended");
-            last_active_count = active;
-        }
-
         progress_update(&prog, total, st.speed, active, actual_count);
     }
 
-    /* Stop engine thread */
-    engine_running = false;
-    if (engine_thread) {
-        WaitForSingleObject(engine_thread, 3000);
-        CloseHandle(engine_thread);
+    /* Final progress update as soon as all bytes are done, before cleanup waits. */
+    int64_t final_total = segmgr_total_downloaded(&segmgr);
+    bool segment_failed = segmgr_has_error(&segmgr);
+    if (!g_interrupted && segment_failed) {
+        fprintf(stderr,
+                "\nError: one or more segments failed. Resume file kept.\n");
+        persist_save(segpath, &segmgr, total_size, conn);
+    } else if (!g_interrupted && total_size > 0 && final_total != total_size) {
+        fprintf(stderr,
+                "\nError: incomplete download (%lld/%lld bytes). Resume file kept.\n",
+                (long long)final_total, (long long)total_size);
+        persist_save(segpath, &segmgr, total_size, conn);
+    } else if (!g_interrupted) {
+        progress_update(&prog, final_total, 0, 0, actual_count);
+        progress_done(&prog);
+        if (opts->progress_mode == PROGRESS_BAR) {
+            printf("DONE: %s (%lld bytes)\n", outpath, (long long)final_total);
+        }
     }
+
+    /* Wake idle workers after user-visible completion. */
+    WakeAllConditionVariable(&segmgr.cv_new_work);
 
     /* Wait for workers to finish */
     thread_pool_wait(workers, actual_count);
-
-    /* Final progress update */
-    int64_t final_total = segmgr_total_downloaded(&segmgr);
-    progress_update(&prog, final_total, 0, 0, actual_count);
-    progress_done(&prog);
-
     thread_pool_cleanup(workers, actual_count);
 
     if (g_interrupted) {
         /* Save state for resume on Ctrl+C */
-        persist_save(segpath, &segmgr, file_size, conn);
+        persist_save(segpath, &segmgr, total_size, conn);
         file_close(&output_file);
         printf("\nPaused. Run again with same URL/args to resume.\n");
         segmgr_destroy(&segmgr);
@@ -521,11 +570,19 @@ static int download_multi(options_t* opts, const char* outpath,
 
     file_close(&output_file);
 
+    if (segment_failed) {
+        segmgr_destroy(&segmgr);
+        return 2;
+    }
+
+    if (total_size > 0 && final_total != total_size) {
+        segmgr_destroy(&segmgr);
+        return 3;
+    }
+
     /* Remove resume file on clean completion */
     persist_remove(segpath);
     segmgr_destroy(&segmgr);
-
-    printf("\nDone.\n");
     return 0;
 }
 
@@ -656,7 +713,10 @@ DWORD WINAPI engine_monitor_thread(LPVOID param) {
     engine_ctx_t* ctx = (engine_ctx_t*)param;
 
     while (*ctx->running && !g_interrupted) {
-        Sleep(2000);
+        for (int i = 0; i < 20 && *ctx->running && !g_interrupted; i++) {
+            Sleep(100);
+        }
+        if (!*ctx->running || g_interrupted) break;
 
         segment_manager_t* mgr = ctx->segmgr;
         int max_conn = ctx->opts->connections;

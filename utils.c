@@ -48,7 +48,7 @@ char* str_trim(char* s) {
 
 char* str_join_path(const char* dir, const char* file) {
     static char buf[MAX_PATH * 2];
-    _snprintf(buf, sizeof(buf), "%s/%s", dir, file);
+    snprintf(buf, sizeof(buf), "%s/%s", dir, file);
     for (int i = 0; buf[i]; i++)
         if (buf[i] == '/') buf[i] = '\\';
     return buf;
@@ -64,30 +64,30 @@ bool str_ends_with(const char* s, const char* suffix) {
 const char* fmt_bytes(int64_t bytes) {
     static char buf[32];
     if (bytes < 1024)
-        _snprintf(buf, sizeof(buf), "%lld B", (long long)bytes);
+        snprintf(buf, sizeof(buf), "%lld B", (long long)bytes);
     else if (bytes < 1024LL * 1024)
-        _snprintf(buf, sizeof(buf), "%.1f KB", bytes / 1024.0);
+        snprintf(buf, sizeof(buf), "%.1f KB", bytes / 1024.0);
     else if (bytes < 1024LL * 1024 * 1024)
-        _snprintf(buf, sizeof(buf), "%.1f MB", bytes / (1024.0 * 1024));
+        snprintf(buf, sizeof(buf), "%.1f MB", bytes / (1024.0 * 1024));
     else
-        _snprintf(buf, sizeof(buf), "%.2f GB", bytes / (1024.0 * 1024 * 1024));
+        snprintf(buf, sizeof(buf), "%.2f GB", bytes / (1024.0 * 1024 * 1024));
     return buf;
 }
 
 const char* fmt_speed(int64_t bps) {
     static char buf[32];
     if (bps < 1024)
-        _snprintf(buf, sizeof(buf), "%lld B/s", (long long)bps);
+        snprintf(buf, sizeof(buf), "%lld B/s", (long long)bps);
     else if (bps < 1024LL * 1024)
-        _snprintf(buf, sizeof(buf), "%.1f KB/s", bps / 1024.0);
+        snprintf(buf, sizeof(buf), "%.1f KB/s", bps / 1024.0);
     else
-        _snprintf(buf, sizeof(buf), "%.1f MB/s", bps / (1024.0 * 1024));
+        snprintf(buf, sizeof(buf), "%.1f MB/s", bps / (1024.0 * 1024));
     return buf;
 }
 
 const char* fmt_pct(double pct) {
     static char buf[16];
-    _snprintf(buf, sizeof(buf), "%.1f%%", pct);
+    snprintf(buf, sizeof(buf), "%.1f%%", pct);
     return buf;
 }
 
@@ -107,6 +107,26 @@ void warn(const char* fmt, ...) {
     vfprintf(stderr, fmt, ap);
     va_end(ap);
     fprintf(stderr, "\n");
+}
+
+uint32_t crc32_update(uint32_t crc, const void* data, int len) {
+    static uint32_t table[256];
+    static bool ready = false;
+    if (!ready) {
+        for (uint32_t i = 0; i < 256; i++) {
+            uint32_t c = i;
+            for (int j = 0; j < 8; j++)
+                c = (c & 1) ? (0xEDB88320U ^ (c >> 1)) : (c >> 1);
+            table[i] = c;
+        }
+        ready = true;
+    }
+
+    const unsigned char* p = (const unsigned char*)data;
+    crc = ~crc;
+    for (int i = 0; i < len; i++)
+        crc = table[(crc ^ p[i]) & 0xff] ^ (crc >> 8);
+    return ~crc;
 }
 
 bool console_has_color(void) {

@@ -3,6 +3,12 @@
 #include <stdio.h>
 #include <string.h>
 
+static int utf8_to_wide(const char* src, wchar_t* dst, int dst_n) {
+    int n = MultiByteToWideChar(CP_UTF8, 0, src, -1, dst, dst_n);
+    if (n > 0) return 0;
+    return MultiByteToWideChar(CP_ACP, 0, src, -1, dst, dst_n) > 0 ? 0 : -1;
+}
+
 int file_open(file_t* f, const char* path, int64_t expected_size) {
     memset(f, 0, sizeof(file_t));
     strncpy(f->path, path, MAX_PATH - 1);
@@ -18,18 +24,29 @@ int file_open(file_t* f, const char* path, int64_t expected_size) {
         for (char* p = tmp + 3; *p; p++) {
             if (*p == '\\') {
                 *p = 0;
-                CreateDirectoryA(tmp, NULL);
+                wchar_t wtmp[MAX_PATH * 2];
+                if (utf8_to_wide(tmp, wtmp, (int)(sizeof(wtmp) / sizeof(wtmp[0]))) == 0)
+                    CreateDirectoryW(wtmp, NULL);
                 *p = '\\';
             }
         }
-        CreateDirectoryA(tmp, NULL);
+        wchar_t wtmp[MAX_PATH * 2];
+        if (utf8_to_wide(tmp, wtmp, (int)(sizeof(wtmp) / sizeof(wtmp[0]))) == 0)
+            CreateDirectoryW(wtmp, NULL);
     }
 
-    f->hFile = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-                           CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    wchar_t wpath[MAX_PATH * 2];
+    if (utf8_to_wide(path, wpath, (int)(sizeof(wpath) / sizeof(wpath[0]))) != 0) {
+        snprintf(f->last_error, sizeof(f->last_error),
+                 "Cannot convert path to UTF-16: %s", path);
+        return -1;
+    }
+
+    f->hFile = CreateFileW(wpath, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                           OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (f->hFile == INVALID_HANDLE_VALUE) {
-        _snprintf(f->last_error, sizeof(f->last_error),
-                  "Cannot create file: %s (error %lu)", path, GetLastError());
+        snprintf(f->last_error, sizeof(f->last_error),
+                 "Cannot create file: %s (error %lu)", path, GetLastError());
         return -1;
     }
 
@@ -55,16 +72,16 @@ int file_write_at(file_t* f, int64_t offset, const char* data, int len) {
     li.QuadPart = offset;
     BOOL ok = SetFilePointerEx(f->hFile, li, NULL, FILE_BEGIN);
     if (!ok) {
-        _snprintf(f->last_error, sizeof(f->last_error),
-                  "SetFilePointerEx error: %lu", GetLastError());
+        snprintf(f->last_error, sizeof(f->last_error),
+                 "SetFilePointerEx error: %lu", GetLastError());
         LeaveCriticalSection(&f->lock);
         return -1;
     }
     DWORD written;
     if (!WriteFile(f->hFile, data, len, &written, NULL)) {
-        _snprintf(f->last_error, sizeof(f->last_error),
-                  "WriteFile error: %lu at offset %lld",
-                  GetLastError(), (long long)offset);
+        snprintf(f->last_error, sizeof(f->last_error),
+                 "WriteFile error: %lu at offset %lld",
+                 GetLastError(), (long long)offset);
         LeaveCriticalSection(&f->lock);
         return -1;
     }
@@ -75,8 +92,8 @@ int file_write_at(file_t* f, int64_t offset, const char* data, int len) {
 int file_write(file_t* f, const char* data, int len) {
     DWORD written;
     if (!WriteFile(f->hFile, data, len, &written, NULL)) {
-        _snprintf(f->last_error, sizeof(f->last_error),
-                  "WriteFile error: %lu", GetLastError());
+        snprintf(f->last_error, sizeof(f->last_error),
+                 "WriteFile error: %lu", GetLastError());
         return -1;
     }
     return (int)written;
@@ -92,13 +109,19 @@ void file_close(file_t* f) {
 }
 
 bool file_exists(const char* path) {
-    DWORD attr = GetFileAttributesA(path);
+    wchar_t wpath[MAX_PATH * 2];
+    if (utf8_to_wide(path, wpath, (int)(sizeof(wpath) / sizeof(wpath[0]))) != 0)
+        return false;
+    DWORD attr = GetFileAttributesW(wpath);
     return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
 }
 
 int64_t file_size(const char* path) {
     WIN32_FILE_ATTRIBUTE_DATA info;
-    if (!GetFileAttributesExA(path, GetFileExInfoStandard, &info))
+    wchar_t wpath[MAX_PATH * 2];
+    if (utf8_to_wide(path, wpath, (int)(sizeof(wpath) / sizeof(wpath[0]))) != 0)
+        return -1;
+    if (!GetFileAttributesExW(wpath, GetFileExInfoStandard, &info))
         return -1;
     LARGE_INTEGER li;
     li.LowPart = info.nFileSizeLow;
@@ -151,10 +174,10 @@ int file_name_from_url(const char* url, char* name, int name_n,
 int file_make_safe_path(const char* dir, const char* name,
                         char* out, int out_n) {
     char raw[MAX_PATH * 2];
-    _snprintf(raw, sizeof(raw), "%s\\%s", dir ? dir : ".", name);
+    snprintf(raw, sizeof(raw), "%s\\%s", dir ? dir : ".", name);
 
     if (strlen(raw) >= MAX_PATH - 12) {
-        _snprintf(out, out_n, "\\\\?\\%s", raw);
+        snprintf(out, out_n, "\\\\?\\%s", raw);
     } else {
         strncpy(out, raw, out_n - 1);
     }

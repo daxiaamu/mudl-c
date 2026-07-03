@@ -7,7 +7,7 @@
 
 /* segments.bin header magic: "MUDL" */
 #define PERSIST_MAGIC 0x4D55444D
-#define PERSIST_VERSION 1
+#define PERSIST_VERSION 2
 
 /* Persist segment state to file.
  * Returns 0 on success, -1 on error. */

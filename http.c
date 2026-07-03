@@ -63,9 +63,9 @@ static int ssl_connect(http_client_t* cli, ssl_t* ssl) {
     ssl->enabled = true;
     if (!g_ssl_inited && ssl_global_init() != 0) return -1;
 
-    /* Build server principal name (host:port) */
+    /* SChannel uses this as the server name/SNI, so keep it host-only. */
     char target[512];
-    _snprintf(target, sizeof(target), "%s:%d", cli->host, cli->port);
+    snprintf(target, sizeof(target), "%s", cli->host);
 
     SecBuffer outBuffers[1];
     SecBufferDesc outDesc;
@@ -413,7 +413,7 @@ int http_parse_url(const char* url, char* scheme, int scheme_n,
 int http_connect(http_client_t* cli, const char* url) {
     memset(cli, 0, sizeof(http_client_t));
 
-    char scheme[16], host[256], path[2048];
+    char scheme[16], host[256], path[HTTP_MAX_PATH];
     int port;
     if (http_parse_url(url, scheme, sizeof(scheme),
                        host, sizeof(host), &port, path, sizeof(path)) != 0) {
@@ -533,7 +533,7 @@ int http_request(http_client_t* cli, http_method_t method,
                  int extra_count, http_response_t* resp) {
     memset(resp, 0, sizeof(http_response_t));
 
-    char req[8192];
+    char req[32768];
     int pos = 0;
 
     const char* method_str = (method == HTTP_HEAD) ? "HEAD" : "GET";
@@ -578,7 +578,7 @@ int http_request(http_client_t* cli, http_method_t method,
         return -1;
     }
 
-    char line[1024];
+    char line[HTTP_MAX_HEADER_LINE];
     if (http_recv_line(cli, line, sizeof(line)) < 0) {
         _snprintf(cli->last_error, sizeof(cli->last_error),
                   "No response from server");
@@ -596,7 +596,13 @@ int http_request(http_client_t* cli, http_method_t method,
 
     int hdr_pos = 0;
     while (1) {
-        if (http_recv_line(cli, line, sizeof(line)) < 0) break;
+        int line_len = http_recv_line(cli, line, sizeof(line));
+        if (line_len < 0) break;
+        if (line_len >= (int)sizeof(line) - 1) {
+            _snprintf(cli->last_error, sizeof(cli->last_error),
+                      "HTTP header line too long");
+            return -1;
+        }
         if (line[0] == 0) break;
 
         int ll = (int)strlen(line);
@@ -624,7 +630,7 @@ int http_request(http_client_t* cli, http_method_t method,
         }
         else if (_strnicmp(line, "Location:", 9) == 0) {
             const char* loc = str_trim(line + 9);
-            strncpy(resp->location, loc, sizeof(resp->location) - 1);
+            snprintf(resp->location, sizeof(resp->location), "%s", loc);
         }
         else if (_strnicmp(line, "Transfer-Encoding:", 18) == 0) {
             if (strstr(line + 18, "chunked"))

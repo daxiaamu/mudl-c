@@ -57,11 +57,6 @@ DWORD WINAPI worker_thread_func(LPVOID param) {
         if (!seg && segmgr_all_done(mgr)) break;
 
         if (!seg) {
-            /* Try RollBack */
-            seg = segmgr_try_steal(mgr, tid);
-        }
-
-        if (!seg) {
             /* Nothing to do - wait for new work or completion */
             if (segmgr_all_done(mgr)) break;
 
@@ -91,10 +86,10 @@ DWORD WINAPI worker_thread_func(LPVOID param) {
         /* 2. Connect and send Range request */
         /* Build range strings */
         char range_start[32], range_end[32];
-        _snprintf(range_start, sizeof(range_start), "%lld",
-                  (long long)(seg->start_offset + seg->downloaded));
-        _snprintf(range_end, sizeof(range_end), "%lld",
-                  (long long)seg->end_offset);
+        snprintf(range_start, sizeof(range_start), "%lld",
+                 (long long)(seg->start_offset + seg->downloaded));
+        snprintf(range_end, sizeof(range_end), "%lld",
+                 (long long)seg->end_offset);
 
         http_client_t http;
         if (http_connect(&http, ctx->url) != 0) {
@@ -104,7 +99,7 @@ DWORD WINAPI worker_thread_func(LPVOID param) {
             continue;
         }
 
-        char scheme[16], host[256], path[2048];
+        char scheme[16], host[256], path[HTTP_MAX_PATH];
         int port;
         http_parse_url(ctx->url, scheme, sizeof(scheme),
                        host, sizeof(host), &port, path, sizeof(path));
@@ -133,29 +128,56 @@ DWORD WINAPI worker_thread_func(LPVOID param) {
             continue;
         }
 
+        int64_t seg_len = seg->end_offset - seg->start_offset + 1;
+        int64_t request_start = seg->start_offset + seg->downloaded;
+        if (resp.content_range_start != request_start ||
+            resp.content_range_end != seg->end_offset ||
+            resp.content_range_total <= 0) {
+            warn("Worker %d: unexpected Content-Range %lld-%lld/%lld for request %lld-%lld",
+                 tid,
+                 (long long)resp.content_range_start,
+                 (long long)resp.content_range_end,
+                 (long long)resp.content_range_total,
+                 (long long)request_start,
+                 (long long)seg->end_offset);
+            segmgr_error(mgr, seg);
+            http_close(&http);
+            continue;
+        }
+
         seg->socket_fd = (int)http.fd;
 
         /* 3. Receive data loop */
         uint64_t last_speed_ms = GetTickCount64();
         int64_t chunk_bytes = 0;
         bool last_chunk = false;
+        bool transfer_error = false;
 
         while (!*ctx->interrupted) {
+            int64_t remaining = seg_len - seg->downloaded;
+            if (remaining <= 0) {
+                break;
+            }
+
             int bytes;
+            int read_size = remaining < WORK_BUF_SIZE ? (int)remaining : WORK_BUF_SIZE;
             if (resp.is_chunked) {
-                bytes = http_read_body_chunked(&http, buf, WORK_BUF_SIZE, &last_chunk);
+                bytes = http_read_body_chunked(&http, buf, read_size, &last_chunk);
             } else {
-                bytes = http_read_body(&http, buf, WORK_BUF_SIZE);
+                bytes = http_read_body(&http, buf, read_size);
             }
             if (bytes < 0) {
                 /* Error */
                 segmgr_error(mgr, seg);
+                transfer_error = true;
                 break;
             }
             if (bytes == 0) {
-                trace("Worker %d: EOF on body (seg downloaded=%lld of range %lld-%lld)", 
-                      tid, (long long)seg->downloaded,
-                      (long long)seg->start_offset, (long long)seg->end_offset);
+                warn("Worker %d: early EOF (%lld/%lld bytes for range %lld-%lld)",
+                     tid, (long long)seg->downloaded, (long long)seg_len,
+                     (long long)seg->start_offset, (long long)seg->end_offset);
+                segmgr_error(mgr, seg);
+                transfer_error = true;
                 break;
             }
 
@@ -165,12 +187,18 @@ DWORD WINAPI worker_thread_func(LPVOID param) {
             if (written != bytes) {
                 warn("Worker %d: write error at offset %lld", tid, (long long)write_offset);
                 segmgr_error(mgr, seg);
+                transfer_error = true;
                 break;
             }
 
+            seg->crc32 = crc32_update(seg->crc32, buf, bytes);
             seg->downloaded += bytes;
             InterlockedExchangeAdd64(ctx->global_downloaded, bytes);
             chunk_bytes += bytes;
+
+            if (seg->downloaded >= seg_len) {
+                break;
+            }
 
             /* Update speed every 500ms */
             uint64_t now = GetTickCount64();
@@ -204,7 +232,7 @@ DWORD WINAPI worker_thread_func(LPVOID param) {
         bool complete = (seg->downloaded >= seg->end_offset - seg->start_offset + 1);
         LeaveCriticalSection(&mgr->lock);
 
-        if (complete) {
+        if (!transfer_error && complete) {
             segmgr_complete(mgr, seg);
         }
         /* If error happened, seg state was already set by segmgr_error */

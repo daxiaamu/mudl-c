@@ -25,6 +25,9 @@ const char* fmt_pct(double pct);
 void die(const char* fmt, ...);
 void warn(const char* fmt, ...);
 
+/* Checksum helpers */
+uint32_t crc32_update(uint32_t crc, const void* data, int len);
+
 /* Console */
 bool console_has_color(void);
 

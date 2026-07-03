@@ -163,6 +163,7 @@ void segmgr_complete(segment_manager_t* mgr, segment_t* seg) {
     mgr->complete_count++;
     LeaveCriticalSection(&mgr->lock);
     WakeConditionVariable(&mgr->cv_done);
+    WakeAllConditionVariable(&mgr->cv_new_work);
 }
 
 void segmgr_error(segment_manager_t* mgr, segment_t* seg) {
@@ -318,4 +319,17 @@ int64_t segmgr_total_remaining(segment_manager_t* mgr) {
     }
     LeaveCriticalSection(&mgr->lock);
     return rem;
+}
+
+bool segmgr_has_error(segment_manager_t* mgr) {
+    bool has_error = false;
+    EnterCriticalSection(&mgr->lock);
+    for (int i = 0; i < mgr->segment_count; i++) {
+        if (mgr->segments[i].state == SEG_ERROR) {
+            has_error = true;
+            break;
+        }
+    }
+    LeaveCriticalSection(&mgr->lock);
+    return has_error;
 }
