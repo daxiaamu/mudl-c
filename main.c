@@ -14,7 +14,7 @@
 #include "thread_pool.h"
 #include "persist.h"
 
-#define VERSION "0.4.0"
+#define VERSION "0.5.1"
 #define DEFAULT_CONNECTIONS 8
 #define DEFAULT_TIMEOUT 30
 #define DEFAULT_RETRY 5
