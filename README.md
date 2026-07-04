@@ -64,12 +64,12 @@ strip mudl.exe
   -d, --dir <DIR>           Output directory
   -c, --connections <N>     Threads (default 8, max 32)
   -q, --quiet               Silent mode
-  -p, -progress <FORMAT>    Progress format: bar | json | none
+  -p, --progress <FORMAT>   Progress format: bar | json | none
   -ua, --user-agent <UA>    Custom User-Agent
       --referer <URL>       Custom Referer
       --header <K:V>        Custom HTTP header (repeatable)
-      -timeout <SEC>        Connection timeout (default 30)
-      -retries <N>          Max retries per segment (default 5)
+      --timeout <SEC>       Connection timeout (default 30)
+      --retries <N>         Max retries per segment (default 5)
   -h, --help                Show help
   -V, --version             Show version
 ```

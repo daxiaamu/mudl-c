@@ -644,7 +644,7 @@ static void parse_args(options_t* opts, int argc, char** argv) {
         else if (strcmp(argv[i], "--referer") == 0 && i+1 < argc) {
             strncpy(opts->referer, argv[++i], sizeof(opts->referer) - 1);
         }
-        else if ((strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "-progress") == 0) && i+1 < argc) {
+        else if ((strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--progress") == 0) && i+1 < argc) {
             i++;
             if (strcmp(argv[i], "bar") == 0) opts->progress_mode = PROGRESS_BAR;
             else if (strcmp(argv[i], "json") == 0) opts->progress_mode = PROGRESS_JSON;
@@ -656,11 +656,11 @@ static void parse_args(options_t* opts, int argc, char** argv) {
             if (opts->extra_count < 32)
                 opts->extra_headers[opts->extra_count++] = _strdup(argv[++i]);
         }
-        else if (strcmp(argv[i], "-timeout") == 0 && i+1 < argc) {
+        else if (strcmp(argv[i], "--timeout") == 0 && i+1 < argc) {
             opts->timeout_sec = atoi(argv[++i]);
             if (opts->timeout_sec < 1) opts->timeout_sec = 1;
         }
-        else if (strcmp(argv[i], "-retries") == 0 && i+1 < argc) {
+        else if (strcmp(argv[i], "--retries") == 0 && i+1 < argc) {
             opts->max_retries = atoi(argv[++i]);
             if (opts->max_retries < 0) opts->max_retries = 0;
         }
@@ -678,24 +678,23 @@ static void print_help(void) {
     printf("MUDL v%s - Multi-threaded Universal Downloader\n", VERSION);
     printf("Usage: mudl [options] <URL>\n\n");
     printf("Options:\n");
-    printf("  -o, --output <FILE>       输出文件名\n");
-    printf("  -d, --dir <DIR>           输出目录\n");
-    printf("  -c, --connections <N>     并发连接数 (默认 %d, 1-32)\n", DEFAULT_CONNECTIONS);
-    printf("  -q, --quiet               安静模式\n");
-    printf("  -p, -progress <FORMAT>    进度: bar|json|none\n");
-    printf("  -ua, --user-agent <UA>    自定义 UA\n");
+    printf("  -o, --output <FILE>       Output filename\n");
+    printf("  -d, --dir <DIR>           Output directory\n");
+    printf("  -c, --connections <N>     Connections (default %d, 1-32)\n", DEFAULT_CONNECTIONS);
+    printf("  -q, --quiet               Quiet mode\n");
+    printf("  -p, --progress <FORMAT>   Progress: bar|json|none\n");
+    printf("  -ua, --user-agent <UA>    Custom User-Agent\n");
     printf("      --referer <URL>       Referer\n");
-    printf("      --header <K:V>        自定义请求头 (可多次)\n");
-    printf("      -timeout <SEC>        超时 (默认 %d)\n", DEFAULT_TIMEOUT);
-    printf("      -retries <N>          重试 (默认 %d)\n", DEFAULT_RETRY);
-    printf("  -h, --help                帮助\n");
-    printf("  -V, --version             版本\n\n");
+    printf("      --header <K:V>        Custom HTTP header (repeatable)\n");
+    printf("      --timeout <SEC>       Timeout (default %d)\n", DEFAULT_TIMEOUT);
+    printf("      --retries <N>         Retries (default %d)\n", DEFAULT_RETRY);
+    printf("  -h, --help                Show help\n");
+    printf("  -V, --version             Show version\n\n");
     printf("Examples:\n");
     printf("  mudl https://example.com/file.zip\n");
     printf("  mudl -c 8 https://example.com/large.iso\n");
     printf("  mudl -q -p json https://example.com/file.bin\n");
 }
-
 static void print_version(void) {
     printf("MUDL v%s\n", VERSION);
     printf("Multi-threaded Universal Downloader (MUDL)\n");
