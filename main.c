@@ -675,21 +675,22 @@ static void parse_args(options_t* opts, int argc, char** argv) {
 }
 
 static void print_help(void) {
-    printf("MUDL v%s - Multi-threaded Universal Downloader\n", VERSION);
+    printf("大侠阿木：daxiaamu.com\n");
+    printf("MUDL - Multi-threaded Universal Downloader\n");
     printf("Usage: mudl [options] <URL>\n\n");
     printf("Options:\n");
-    printf("  -o, --output <FILE>       Output filename\n");
-    printf("  -d, --dir <DIR>           Output directory\n");
-    printf("  -c, --connections <N>     Connections (default %d, 1-32)\n", DEFAULT_CONNECTIONS);
-    printf("  -q, --quiet               Quiet mode\n");
-    printf("  -p, --progress <FORMAT>   Progress: bar|json|none\n");
+    printf("  -o,  --output <FILE>      Output filename\n");
+    printf("  -d,  --dir <DIR>          Output directory\n");
+    printf("  -c,  --connections <N>    Connections (default %d, 1-32)\n", DEFAULT_CONNECTIONS);
+    printf("  -q,  --quiet              Quiet mode\n");
+    printf("  -p,  --progress <FORMAT>  Progress: bar|json|none\n");
     printf("  -ua, --user-agent <UA>    Custom User-Agent\n");
-    printf("      --referer <URL>       Referer\n");
-    printf("      --header <K:V>        Custom HTTP header (repeatable)\n");
-    printf("      --timeout <SEC>       Timeout (default %d)\n", DEFAULT_TIMEOUT);
-    printf("      --retries <N>         Retries (default %d)\n", DEFAULT_RETRY);
-    printf("  -h, --help                Show help\n");
-    printf("  -V, --version             Show version\n\n");
+    printf("       --referer <URL>      Referer\n");
+    printf("       --header <K:V>       Custom HTTP header (repeatable)\n");
+    printf("       --timeout <SEC>      Timeout (default %d)\n", DEFAULT_TIMEOUT);
+    printf("       --retries <N>        Retries (default %d)\n", DEFAULT_RETRY);
+    printf("  -h,  --help               Show help\n");
+    printf("  -V,  --version            Show version\n\n");
     printf("Examples:\n");
     printf("  mudl https://example.com/file.zip\n");
     printf("  mudl -c 8 https://example.com/large.iso\n");
