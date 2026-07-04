@@ -9,6 +9,18 @@
 #include <sspi.h>
 #include <schnlsp.h>
 
+#ifndef SP_PROT_TLS1_0_CLIENT
+#define SP_PROT_TLS1_0_CLIENT 0x00000080
+#endif
+
+#ifndef SP_PROT_TLS1_1_CLIENT
+#define SP_PROT_TLS1_1_CLIENT 0x00000200
+#endif
+
+#ifndef SP_PROT_TLS1_2_CLIENT
+#define SP_PROT_TLS1_2_CLIENT 0x00000800
+#endif
+
 typedef struct {
     bool     enabled;       /* is this connection using SSL? */
     CredHandle hCred;       /* credential handle */
@@ -44,7 +56,8 @@ static int ssl_global_init(void) {
 
     SCHANNEL_CRED cred = {0};
     cred.dwVersion = SCHANNEL_CRED_VERSION;
-    cred.grbitEnabledProtocols = 0;  /* system default TLS */
+    cred.grbitEnabledProtocols =
+        SP_PROT_TLS1_0_CLIENT | SP_PROT_TLS1_1_CLIENT | SP_PROT_TLS1_2_CLIENT;
     cred.dwFlags = SCH_CRED_NO_DEFAULT_CREDS | SCH_CRED_MANUAL_CRED_VALIDATION;
 
     SECURITY_STATUS s = AcquireCredentialsHandleA(
@@ -475,7 +488,10 @@ int http_connect(http_client_t* cli, const char* url) {
         }
         if (ssl_connect(cli, ssl) != 0) {
             _snprintf(cli->last_error, sizeof(cli->last_error),
-                      "SSL handshake failed with %s:%d", host, port);
+                      "SSL handshake failed with %s:%d. "
+                      "On Windows 7, install updates, enable TLS 1.2, "
+                      "and update root certificates.",
+                      host, port);
             free(ssl);
             closesocket(cli->fd);
             cli->fd = INVALID_SOCKET;
