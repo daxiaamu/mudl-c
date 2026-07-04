@@ -11,7 +11,7 @@
 | Signed URLs | Handles long redirect URLs used by cloud/CDN signed links |
 | Native HTTPS | Uses Windows SChannel, no bundled OpenSSL |
 | UTF-8 paths | Supports non-ASCII output filenames through Windows wide APIs |
-| Progress output | Console progress bar or JSON output for scripting |
+| Progress output | Console progress bar, log-friendly lines, or JSON output |
 
 ## Quick Start
 
@@ -19,6 +19,7 @@
 mudl "https://example.com/file.zip"
 mudl -c 1 "https://example.com/file.zip"
 mudl -c 16 -o output.zip "https://example.com/file.iso"
+mudl --progress line "https://example.com/file.zip"
 ```
 
 ## Resume With New URL
@@ -60,19 +61,21 @@ strip mudl.exe
 ## Options
 
 ```text
-  -o, --output <FILE>       Output filename
-  -d, --dir <DIR>           Output directory
-  -c, --connections <N>     Threads (default 8, max 32)
-  -q, --quiet               Silent mode
-  -p, --progress <FORMAT>   Progress format: bar | json | none
+  -o,  --output <FILE>      Output filename
+  -d,  --dir <DIR>          Output directory
+  -c,  --connections <N>    Threads (default 8, max 32)
+  -q,  --quiet              Silent mode
+  -p,  --progress <FORMAT>  Progress format: bar | line | json | none
   -ua, --user-agent <UA>    Custom User-Agent
-      --referer <URL>       Custom Referer
-      --header <K:V>        Custom HTTP header (repeatable)
-      --timeout <SEC>       Connection timeout (default 30)
-      --retries <N>         Max retries per segment (default 5)
-  -h, --help                Show help
-  -V, --version             Show version
+       --referer <URL>      Custom Referer
+       --header <K:V>       Custom HTTP header (repeatable)
+       --timeout <SEC>      Connection timeout (default 30)
+       --retries <N>        Max retries per segment (default 5)
+  -h,  --help               Show help
+  -V,  --version            Show version
 ```
+
+Use `--progress line` for background jobs or log files. It prints periodic full lines instead of rewriting the same console line.
 
 ## Project Structure
 
@@ -82,7 +85,7 @@ http.c / .h       HTTP/HTTPS client using SChannel
 file_io.c / .h    Thread-safe file I/O and UTF-8 path handling
 segment.c / .h    Segment manager
 thread_pool.c/.h  Worker thread pool
-progress.c / .h   Progress bar and JSON output
+progress.c / .h   Progress bar, line, and JSON output
 persist.c / .h    Resume state and CRC32 validation
 utils.c / .h      Formatting, tracing, and checksum helpers
 ```

@@ -6,6 +6,7 @@
 
 typedef enum {
     PROGRESS_BAR = 0,
+    PROGRESS_LINE,
     PROGRESS_JSON,
     PROGRESS_SILENT,
 } progress_mode_t;
@@ -18,6 +19,7 @@ typedef struct {
     int             threads_active;
     int             threads_total;
     uint64_t        start_time_ms;
+    uint64_t        last_line_ms;
     bool            finished;
 } progress_t;
 

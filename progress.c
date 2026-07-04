@@ -15,6 +15,7 @@ void progress_init(progress_t* p, progress_mode_t mode,
 
 void progress_update(progress_t* p, int64_t downloaded,
                      int64_t speed, int active, int total) {
+    uint64_t now = now_ms();
     p->downloaded = downloaded;
     p->speed_bps = speed;
     p->threads_active = active;
@@ -33,6 +34,38 @@ void progress_update(progress_t* p, int64_t downloaded,
                (long long)downloaded, (long long)p->total,
                (long long)speed, pct, active, eta);
         fflush(stdout);
+        return;
+    }
+
+    if (p->mode == PROGRESS_LINE) {
+        bool done = p->total > 0 && downloaded >= p->total;
+        if (!done && p->last_line_ms > 0 && now - p->last_line_ms < 1000)
+            return;
+
+        double pct = p->total > 0 ? (100.0 * downloaded / p->total) : 0.0;
+        int eta_sec = (speed > 0 && p->total > 0)
+                      ? (int)((p->total - downloaded) / speed)
+                      : 0;
+        char downloaded_s[32], total_s[32], speed_s[32], eta_s[32];
+        snprintf(downloaded_s, sizeof(downloaded_s), "%s", fmt_bytes(downloaded));
+        snprintf(total_s, sizeof(total_s), "%s", fmt_bytes(p->total));
+        snprintf(speed_s, sizeof(speed_s), "%s", fmt_speed(speed));
+        if (eta_sec > 0) {
+            int h = eta_sec / 3600;
+            int m = (eta_sec % 3600) / 60;
+            int s = eta_sec % 60;
+            if (h > 0)
+                snprintf(eta_s, sizeof(eta_s), "%d:%02d:%02d", h, m, s);
+            else
+                snprintf(eta_s, sizeof(eta_s), "%d:%02d", m, s);
+        } else {
+            snprintf(eta_s, sizeof(eta_s), "--");
+        }
+
+        printf("%.1f%% %s/%s %s ETA %s T:%d/%d\n",
+               pct, downloaded_s, total_s, speed_s, eta_s, active, total);
+        fflush(stdout);
+        p->last_line_ms = now;
         return;
     }
 
@@ -100,7 +133,7 @@ void progress_done(progress_t* p) {
     uint64_t elapsed_ms = now_ms() - p->start_time_ms;
     double elapsed_sec = elapsed_ms / 1000.0;
 
-    if (p->mode == PROGRESS_BAR) {
+    if (p->mode == PROGRESS_BAR || p->mode == PROGRESS_LINE) {
         printf("\n");
         printf("Downloaded %s in %.1fs (avg %s)\n",
                fmt_bytes(p->downloaded), elapsed_sec,

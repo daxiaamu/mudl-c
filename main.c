@@ -647,6 +647,7 @@ static void parse_args(options_t* opts, int argc, char** argv) {
         else if ((strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--progress") == 0) && i+1 < argc) {
             i++;
             if (strcmp(argv[i], "bar") == 0) opts->progress_mode = PROGRESS_BAR;
+            else if (strcmp(argv[i], "line") == 0) opts->progress_mode = PROGRESS_LINE;
             else if (strcmp(argv[i], "json") == 0) opts->progress_mode = PROGRESS_JSON;
             else if (strcmp(argv[i], "none") == 0 || strcmp(argv[i], "quiet") == 0)
                 opts->progress_mode = PROGRESS_SILENT;
@@ -683,7 +684,7 @@ static void print_help(void) {
     printf("  -d,  --dir <DIR>          Output directory\n");
     printf("  -c,  --connections <N>    Connections (default %d, 1-32)\n", DEFAULT_CONNECTIONS);
     printf("  -q,  --quiet              Quiet mode\n");
-    printf("  -p,  --progress <FORMAT>  Progress: bar|json|none\n");
+    printf("  -p,  --progress <FORMAT>  Progress: bar|line|json|none\n");
     printf("  -ua, --user-agent <UA>    Custom User-Agent\n");
     printf("       --referer <URL>      Referer\n");
     printf("       --header <K:V>       Custom HTTP header (repeatable)\n");
