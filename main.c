@@ -16,7 +16,7 @@
 #include "thread_pool.h"
 #include "persist.h"
 
-#define VERSION "0.5.3"
+#define VERSION "0.5.4"
 #define DEFAULT_CONNECTIONS 8
 #define DEFAULT_TIMEOUT 30
 #define DEFAULT_RETRY 5
@@ -196,53 +196,66 @@ int main(int argc, char** argv) {
     int64_t file_size = 0;
     bool multi_supported = false;
 
-    if (http_connect(&probe, opts.url) == 0) {
-        int r = http_request(&probe, HTTP_GET, path, "0-", NULL,
-                             opts.user_agent, opts.referer,
-                             (const char**)opts.extra_headers, opts.extra_count,
-                             &probe_resp);
-
-        /* Follow redirects (OSS signed URLs often redirect to CDN) */
-        int redirect_count = 0;
-        while (r == 0 && (probe_resp.status_code == 301 ||
-               probe_resp.status_code == 302 ||
-               probe_resp.status_code == 307 ||
-               probe_resp.status_code == 308) &&
-               probe_resp.location[0] && redirect_count < 5) {
-            redirect_count++;
-            printf("Redirect %d: %s\n", redirect_count, probe_resp.location);
-            http_close(&probe);
-
-            snprintf(opts.url, sizeof(opts.url), "%s", probe_resp.location);
-            if (http_connect(&probe, opts.url) != 0) break;
-
-            char scheme[16], host[256], path_new[HTTP_MAX_PATH];
-            int port;
-            http_parse_url(opts.url, scheme, sizeof(scheme),
-                           host, sizeof(host), &port, path_new, sizeof(path_new));
-            snprintf(path, sizeof(path), "%s", path_new);
-
-            r = http_request(&probe, HTTP_GET, path,
-                             "0-", NULL,
-                             opts.user_agent, opts.referer,
-                             (const char**)opts.extra_headers, opts.extra_count,
-                             &probe_resp);
-        }
-
-        if (r == 0) {
-            if (probe_resp.status_code == 206) {
-                file_size = probe_resp.content_range_total;
-                multi_supported = true;
-                printf("Server supports Range (file size: %lld bytes)\n",
-                       (long long)file_size);
-            } else if (probe_resp.status_code == 200 && probe_resp.content_length > 0) {
-                file_size = probe_resp.content_length;
-                printf("File size from Content-Length: %lld bytes\n",
-                       (long long)file_size);
-            }
-        }
-        http_close(&probe);
+    if (http_connect(&probe, opts.url, opts.timeout_sec) != 0) {
+        fprintf(stderr, "Error: %s\n", probe.last_error);
+        http_global_cleanup();
+        return 1;
     }
+
+    int r = http_request(&probe, HTTP_GET, path, "0-", NULL,
+                         opts.user_agent, opts.referer,
+                         (const char**)opts.extra_headers, opts.extra_count,
+                         &probe_resp);
+
+    /* Follow redirects (OSS signed URLs often redirect to CDN) */
+    int redirect_count = 0;
+    while (r == 0 && (probe_resp.status_code == 301 ||
+           probe_resp.status_code == 302 ||
+           probe_resp.status_code == 307 ||
+           probe_resp.status_code == 308) &&
+           probe_resp.location[0] && redirect_count < 5) {
+        redirect_count++;
+        printf("Redirect %d: %s\n", redirect_count, probe_resp.location);
+        http_close(&probe);
+
+        snprintf(opts.url, sizeof(opts.url), "%s", probe_resp.location);
+        if (http_connect(&probe, opts.url, opts.timeout_sec) != 0) {
+            fprintf(stderr, "Redirect error: %s\n", probe.last_error);
+            http_global_cleanup();
+            return 1;
+        }
+
+        char scheme[16], host[256], path_new[HTTP_MAX_PATH];
+        int port;
+        http_parse_url(opts.url, scheme, sizeof(scheme),
+                       host, sizeof(host), &port, path_new, sizeof(path_new));
+        snprintf(path, sizeof(path), "%s", path_new);
+
+        r = http_request(&probe, HTTP_GET, path,
+                         "0-", NULL,
+                         opts.user_agent, opts.referer,
+                         (const char**)opts.extra_headers, opts.extra_count,
+                         &probe_resp);
+    }
+
+    if (r != 0) {
+        fprintf(stderr, "Error: %s\n", probe.last_error);
+        http_close(&probe);
+        http_global_cleanup();
+        return 1;
+    }
+
+    if (probe_resp.status_code == 206) {
+        file_size = probe_resp.content_range_total;
+        multi_supported = true;
+        printf("Server supports Range (file size: %lld bytes)\n",
+               (long long)file_size);
+    } else if (probe_resp.status_code == 200 && probe_resp.content_length > 0) {
+        file_size = probe_resp.content_length;
+        printf("File size from Content-Length: %lld bytes\n",
+               (long long)file_size);
+        }
+    http_close(&probe);
 
     if (multi_supported && opts.connections > 1) {
         exit_code = download_multi(&opts, outpath, path, file_size);
@@ -285,7 +298,7 @@ static int download_single(options_t* opts, const char* outpath,
     printf("Method:  single-thread%s\n\n",
            resumed ? " (resume)" : "");
     http_client_t cli;
-    if (http_connect(&cli, opts->url) != 0) {
+    if (http_connect(&cli, opts->url, opts->timeout_sec) != 0) {
         fprintf(stderr, "Error: %s\n", cli.last_error);
         return 2;
     }
@@ -330,7 +343,7 @@ static int download_single(options_t* opts, const char* outpath,
 
         /* Update URL and reconnect */
         snprintf(opts->url, sizeof(opts->url), "%s", get_resp.location);
-        if (http_connect(&cli, opts->url) != 0) {
+        if (http_connect(&cli, opts->url, opts->timeout_sec) != 0) {
             fprintf(stderr, "Redirect error: %s\n", cli.last_error);
             file_close(&f);
             return 2;
@@ -539,6 +552,7 @@ static int download_multi(options_t* opts, const char* outpath,
     base_ctx.referer = opts->referer;
     base_ctx.extra_headers = (const char**)opts->extra_headers;
     base_ctx.extra_count = opts->extra_count;
+    base_ctx.timeout_sec = opts->timeout_sec;
     base_ctx.segmgr = &segmgr;
     base_ctx.output_file = &output_file;
     base_ctx.interrupted = &g_interrupted;

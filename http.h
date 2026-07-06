@@ -45,13 +45,14 @@ typedef struct {
     char        host[256];
     int         port;
     bool        connected;
+    int         timeout_sec;
     char        last_error[256];
     void*       ssl_ctx;       /* SChannel SSL context, NULL if plain HTTP */
 } http_client_t;
 
 int http_global_init(void);
 void http_global_cleanup(void);
-int http_connect(http_client_t* cli, const char* url);
+int http_connect(http_client_t* cli, const char* url, int timeout_sec);
 int http_request(http_client_t* cli, http_method_t method,
                  const char* path, const char* range_start,
                  const char* range_end, const char* ua,

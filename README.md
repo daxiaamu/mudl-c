@@ -22,6 +22,8 @@ mudl -c 16 -d downloads -o output.zip "https://example.com/file.iso"
 mudl --progress line "https://example.com/file.zip"
 ```
 
+`-d` and `-o` follow aria2-style output rules: `-d` selects the output directory, and `-o` selects the output filename only. Use `-d "D:\Downloads" -o file.zip` instead of passing a full path to `-o`.
+
 ## Resume With New URL
 
 ```bash
@@ -34,9 +36,11 @@ mudl -c 8 "https://cdn.example.com/file.zip?token=abc"
 
 Resume works when the new URL points to the same file size. Existing data is verified against the saved segment CRC32 before download continues.
 
-## Windows 7 HTTPS Note
+## HTTPS Notes
 
-MUDL-C uses the system SChannel TLS stack. On Windows 7, modern HTTPS sites may require TLS 1.2 updates, TLS 1.2 enabled in the system, and up-to-date root certificates. If the system TLS stack is too old, HTTPS handshakes can fail before any download starts.
+MUDL-C uses the system SChannel TLS stack. HTTPS support depends on the Windows TLS configuration, certificate store, and any local network interception software. On Windows 7, modern HTTPS sites may require TLS 1.2 updates, TLS 1.2 enabled in the system, and up-to-date root certificates.
+
+`--timeout` controls each network connect/read attempt. If the initial range probe cannot get a response, MUDL stops immediately instead of waiting for a second full download attempt.
 
 ## Build From Source
 
@@ -76,6 +80,8 @@ strip mudl.exe
 ```
 
 Use `--progress line` for background jobs or log files. It prints periodic full lines instead of rewriting the same console line.
+
+Custom headers may contain spaces when quoted by the shell, for example `--header "X-Test: hello world"`.
 
 ## Project Structure
 

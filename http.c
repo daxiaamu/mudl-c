@@ -1,3 +1,7 @@
+#ifndef SECURITY_WIN32
+#define SECURITY_WIN32
+#endif
+
 #include "http.h"
 #include "utils.h"
 #include <stdio.h>
@@ -48,6 +52,58 @@ static void ssl_close(ssl_t* ssl);
 
 static bool winsock_inited = false;
 
+static int connect_with_timeout(SOCKET fd, const struct sockaddr* addr,
+                                int addrlen, int timeout_sec, char* err,
+                                int err_n) {
+    u_long nonblock = 1;
+    ioctlsocket(fd, FIONBIO, &nonblock);
+
+    int r = connect(fd, addr, addrlen);
+    if (r == 0) {
+        nonblock = 0;
+        ioctlsocket(fd, FIONBIO, &nonblock);
+        return 0;
+    }
+
+    int wsa = WSAGetLastError();
+    if (wsa != WSAEWOULDBLOCK && wsa != WSAEINPROGRESS && wsa != WSAEINVAL) {
+        _snprintf(err, err_n, "connect failed: %d", wsa);
+        nonblock = 0;
+        ioctlsocket(fd, FIONBIO, &nonblock);
+        return -1;
+    }
+
+    fd_set wfds;
+    FD_ZERO(&wfds);
+    FD_SET(fd, &wfds);
+    struct timeval tv;
+    tv.tv_sec = timeout_sec > 0 ? timeout_sec : 30;
+    tv.tv_usec = 0;
+
+    r = select(0, NULL, &wfds, NULL, &tv);
+    if (r <= 0) {
+        _snprintf(err, err_n, r == 0 ? "connect timed out" : "connect select failed: %d",
+                  WSAGetLastError());
+        nonblock = 0;
+        ioctlsocket(fd, FIONBIO, &nonblock);
+        return -1;
+    }
+
+    int so_error = 0;
+    int len = sizeof(so_error);
+    getsockopt(fd, SOL_SOCKET, SO_ERROR, (char*)&so_error, &len);
+    if (so_error != 0) {
+        _snprintf(err, err_n, "connect failed: %d", so_error);
+        nonblock = 0;
+        ioctlsocket(fd, FIONBIO, &nonblock);
+        return -1;
+    }
+
+    nonblock = 0;
+    ioctlsocket(fd, FIONBIO, &nonblock);
+    return 0;
+}
+
 
 /* ===== SChannel SSL Implementation ===== */
 
@@ -56,9 +112,8 @@ static int ssl_global_init(void) {
 
     SCHANNEL_CRED cred = {0};
     cred.dwVersion = SCHANNEL_CRED_VERSION;
-    cred.grbitEnabledProtocols =
-        SP_PROT_TLS1_0_CLIENT | SP_PROT_TLS1_1_CLIENT | SP_PROT_TLS1_2_CLIENT;
-    cred.dwFlags = SCH_CRED_NO_DEFAULT_CREDS | SCH_CRED_MANUAL_CRED_VALIDATION;
+    cred.grbitEnabledProtocols = 0; /* Use OS defaults, including TLS 1.3 where available. */
+    cred.dwFlags = 0;
 
     SECURITY_STATUS s = AcquireCredentialsHandleA(
         NULL, (LPSTR)UNISP_NAME_A, SECPKG_CRED_OUTBOUND,
@@ -423,8 +478,9 @@ int http_parse_url(const char* url, char* scheme, int scheme_n,
     return 0;
 }
 
-int http_connect(http_client_t* cli, const char* url) {
+int http_connect(http_client_t* cli, const char* url, int timeout_sec) {
     memset(cli, 0, sizeof(http_client_t));
+    cli->timeout_sec = timeout_sec > 0 ? timeout_sec : 30;
 
     char scheme[16], host[256], path[HTTP_MAX_PATH];
     int port;
@@ -462,17 +518,23 @@ int http_connect(http_client_t* cli, const char* url) {
         return -1;
     }
 
-    r = connect(cli->fd, result->ai_addr, (int)result->ai_addrlen);
+    char connect_error[128] = {0};
+    r = connect_with_timeout(cli->fd, result->ai_addr, (int)result->ai_addrlen,
+                             cli->timeout_sec, connect_error, sizeof(connect_error));
     freeaddrinfo(result);
 
     if (r != 0) {
         _snprintf(cli->last_error, sizeof(cli->last_error),
-                  "Connection to %s:%d failed: %d",
-                  host, port, WSAGetLastError());
+                  "Connection to %s:%d failed: %s",
+                  host, port, connect_error[0] ? connect_error : "unknown error");
         closesocket(cli->fd);
         cli->fd = INVALID_SOCKET;
         return -1;
     }
+
+    DWORD timeout_ms = (DWORD)cli->timeout_sec * 1000;
+    setsockopt(cli->fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout_ms, sizeof(timeout_ms));
+    setsockopt(cli->fd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeout_ms, sizeof(timeout_ms));
 
     cli->connected = true;
 
@@ -488,9 +550,9 @@ int http_connect(http_client_t* cli, const char* url) {
         }
         if (ssl_connect(cli, ssl) != 0) {
             _snprintf(cli->last_error, sizeof(cli->last_error),
-                      "SSL handshake failed with %s:%d. "
-                      "On Windows 7, install updates, enable TLS 1.2, "
-                      "and update root certificates.",
+                      "TLS handshake failed with %s:%d using Windows SChannel. "
+                      "Check system TLS/certificate settings, network interception, "
+                      "or try another HTTPS backend.",
                       host, port);
             free(ssl);
             closesocket(cli->fd);

@@ -17,6 +17,7 @@ typedef struct {
     const char*  referer;
     const char** extra_headers;
     int          extra_count;
+    int          timeout_sec;
     segment_manager_t* segmgr;
     file_t*      output_file;
     volatile bool* interrupted;
