@@ -75,6 +75,11 @@ strip mudl.exe
        --header <K:V>       Custom HTTP header (repeatable)
        --timeout <SEC>      Connection timeout (default 30)
        --retries <N>        Max retries per segment (default 5)
+       --proxy <PROXY>      Alias for --all-proxy
+       --all-proxy <PROXY>  Proxy for all HTTP(S) downloads
+       --http-proxy <PROXY> Proxy for HTTP downloads
+       --https-proxy <PROXY> Proxy for HTTPS downloads
+       --no-proxy <LIST>    Comma-separated hosts/domains/IP ranges
   -h,  --help               Show help
   -V,  --version            Show version
 ```
@@ -82,6 +87,32 @@ strip mudl.exe
 Use `--progress line` for background jobs or log files. It prints periodic full lines instead of rewriting the same console line.
 
 Custom headers may contain spaces when quoted by the shell, for example `--header "X-Test: hello world"`.
+
+## Proxy
+
+MUDL supports lightweight HTTP proxies without external dependencies:
+
+```bash
+mudl --proxy http://127.0.0.1:7890 "https://example.com/file.zip"
+mudl --http-proxy http://127.0.0.1:8080 "http://example.com/file.zip"
+mudl --https-proxy http://user:pass@127.0.0.1:7890 "https://example.com/file.zip"
+```
+
+Proxy options:
+
+```text
+       --proxy <PROXY>       Alias for --all-proxy
+       --all-proxy <PROXY>   Proxy for all HTTP(S) downloads
+       --http-proxy <PROXY>  Proxy for HTTP downloads
+       --https-proxy <PROXY> Proxy for HTTPS downloads
+       --no-proxy <LIST>     Comma-separated hosts/domains/IP ranges
+```
+
+`PROXY` uses aria2-style syntax: `[http://][USER:PASSWORD@]HOST[:PORT]`.
+
+`--no-proxy` accepts exact hosts, leading-dot domains, and numeric IPv4 CIDR ranges. Examples: `localhost,127.0.0.1,.daxiaamu.com,192.168.0.0/16`.
+
+HTTPS downloads through an HTTP proxy use `CONNECT` tunneling. TLS is still handled by Windows SChannel after the proxy tunnel is established.
 
 ## Project Structure
 

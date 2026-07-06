@@ -41,9 +41,27 @@ typedef struct {
 } http_response_t;
 
 typedef struct {
-    SOCKET      fd;
+    bool        enabled;
     char        host[256];
     int         port;
+    char        auth[512];
+} proxy_endpoint_t;
+
+typedef struct {
+    proxy_endpoint_t all;
+    proxy_endpoint_t http;
+    proxy_endpoint_t https;
+    char        no_proxy[1024];
+} proxy_config_t;
+
+typedef struct {
+    SOCKET      fd;
+    char        scheme[16];
+    char        host[256];
+    int         port;
+    bool        proxy_active;
+    bool        proxy_tunnel;
+    char        proxy_auth[512];
     bool        connected;
     int         timeout_sec;
     char        last_error[256];
@@ -52,7 +70,9 @@ typedef struct {
 
 int http_global_init(void);
 void http_global_cleanup(void);
-int http_connect(http_client_t* cli, const char* url, int timeout_sec);
+int http_proxy_parse(const char* proxy, proxy_endpoint_t* out, char* err, int err_n);
+int http_connect(http_client_t* cli, const char* url, int timeout_sec,
+                 const proxy_config_t* proxy);
 int http_request(http_client_t* cli, http_method_t method,
                  const char* path, const char* range_start,
                  const char* range_end, const char* ua,

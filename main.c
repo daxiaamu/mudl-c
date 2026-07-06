@@ -16,7 +16,7 @@
 #include "thread_pool.h"
 #include "persist.h"
 
-#define VERSION "0.5.4"
+#define VERSION "0.5.5"
 #define DEFAULT_CONNECTIONS 8
 #define DEFAULT_TIMEOUT 30
 #define DEFAULT_RETRY 5
@@ -39,6 +39,7 @@ typedef struct {
     char        referer[1024];
     char*       extra_headers[32];
     int         extra_count;
+    proxy_config_t proxy;
     bool        help;
     bool        version;
 } options_t;
@@ -48,6 +49,7 @@ static volatile bool g_interrupted = false;
 static void parse_args(options_t* opts, int argc, char** argv);
 static void parse_embedded_args(options_t* opts, char* arg_tail);
 static void split_embedded_args(options_t* opts, char* value);
+static void set_proxy_option(proxy_endpoint_t* dst, const char* value);
 static void print_help(void);
 static void print_version(void);
 static void sig_handler(int sig);
@@ -196,7 +198,7 @@ int main(int argc, char** argv) {
     int64_t file_size = 0;
     bool multi_supported = false;
 
-    if (http_connect(&probe, opts.url, opts.timeout_sec) != 0) {
+    if (http_connect(&probe, opts.url, opts.timeout_sec, &opts.proxy) != 0) {
         fprintf(stderr, "Error: %s\n", probe.last_error);
         http_global_cleanup();
         return 1;
@@ -219,7 +221,7 @@ int main(int argc, char** argv) {
         http_close(&probe);
 
         snprintf(opts.url, sizeof(opts.url), "%s", probe_resp.location);
-        if (http_connect(&probe, opts.url, opts.timeout_sec) != 0) {
+        if (http_connect(&probe, opts.url, opts.timeout_sec, &opts.proxy) != 0) {
             fprintf(stderr, "Redirect error: %s\n", probe.last_error);
             http_global_cleanup();
             return 1;
@@ -298,7 +300,7 @@ static int download_single(options_t* opts, const char* outpath,
     printf("Method:  single-thread%s\n\n",
            resumed ? " (resume)" : "");
     http_client_t cli;
-    if (http_connect(&cli, opts->url, opts->timeout_sec) != 0) {
+    if (http_connect(&cli, opts->url, opts->timeout_sec, &opts->proxy) != 0) {
         fprintf(stderr, "Error: %s\n", cli.last_error);
         return 2;
     }
@@ -343,7 +345,7 @@ static int download_single(options_t* opts, const char* outpath,
 
         /* Update URL and reconnect */
         snprintf(opts->url, sizeof(opts->url), "%s", get_resp.location);
-        if (http_connect(&cli, opts->url, opts->timeout_sec) != 0) {
+        if (http_connect(&cli, opts->url, opts->timeout_sec, &opts->proxy) != 0) {
             fprintf(stderr, "Redirect error: %s\n", cli.last_error);
             file_close(&f);
             return 2;
@@ -553,6 +555,7 @@ static int download_multi(options_t* opts, const char* outpath,
     base_ctx.extra_headers = (const char**)opts->extra_headers;
     base_ctx.extra_count = opts->extra_count;
     base_ctx.timeout_sec = opts->timeout_sec;
+    base_ctx.proxy = &opts->proxy;
     base_ctx.segmgr = &segmgr;
     base_ctx.output_file = &output_file;
     base_ctx.interrupted = &g_interrupted;
@@ -735,6 +738,18 @@ static void parse_args(options_t* opts, int argc, char** argv) {
             opts->max_retries = atoi(argv[++i]);
             if (opts->max_retries < 0) opts->max_retries = 0;
         }
+        else if ((strcmp(argv[i], "--proxy") == 0 || strcmp(argv[i], "--all-proxy") == 0) && i+1 < argc) {
+            set_proxy_option(&opts->proxy.all, argv[++i]);
+        }
+        else if (strcmp(argv[i], "--http-proxy") == 0 && i+1 < argc) {
+            set_proxy_option(&opts->proxy.http, argv[++i]);
+        }
+        else if (strcmp(argv[i], "--https-proxy") == 0 && i+1 < argc) {
+            set_proxy_option(&opts->proxy.https, argv[++i]);
+        }
+        else if (strcmp(argv[i], "--no-proxy") == 0 && i+1 < argc) {
+            strncpy(opts->proxy.no_proxy, argv[++i], sizeof(opts->proxy.no_proxy) - 1);
+        }
         else if (argv[i][0] == '-') {
             die("Unknown option: %s. Use -h for help.", argv[i]);
         }
@@ -743,6 +758,12 @@ static void parse_args(options_t* opts, int argc, char** argv) {
                 strncpy(opts->url, argv[i], sizeof(opts->url) - 1);
         }
     }
+}
+
+static void set_proxy_option(proxy_endpoint_t* dst, const char* value) {
+    char err[256] = {0};
+    if (http_proxy_parse(value, dst, err, sizeof(err)) != 0)
+        die("%s", err);
 }
 
 static void parse_embedded_args(options_t* opts, char* arg_tail) {
@@ -776,6 +797,14 @@ static void parse_embedded_args(options_t* opts, char* arg_tail) {
         } else if (strcmp(tokens[i], "--retries") == 0 && i + 1 < count) {
             opts->max_retries = atoi(tokens[++i]);
             if (opts->max_retries < 0) opts->max_retries = 0;
+        } else if ((strcmp(tokens[i], "--proxy") == 0 || strcmp(tokens[i], "--all-proxy") == 0) && i + 1 < count) {
+            set_proxy_option(&opts->proxy.all, tokens[++i]);
+        } else if (strcmp(tokens[i], "--http-proxy") == 0 && i + 1 < count) {
+            set_proxy_option(&opts->proxy.http, tokens[++i]);
+        } else if (strcmp(tokens[i], "--https-proxy") == 0 && i + 1 < count) {
+            set_proxy_option(&opts->proxy.https, tokens[++i]);
+        } else if (strcmp(tokens[i], "--no-proxy") == 0 && i + 1 < count) {
+            strncpy(opts->proxy.no_proxy, tokens[++i], sizeof(opts->proxy.no_proxy) - 1);
         } else if (strcmp(tokens[i], "-q") == 0 || strcmp(tokens[i], "--quiet") == 0) {
             opts->quiet = true;
             opts->progress_mode = PROGRESS_SILENT;
@@ -810,6 +839,11 @@ static void print_help(void) {
     printf("       --header <K:V>       Custom HTTP header (repeatable)\n");
     printf("       --timeout <SEC>      Timeout (default %d)\n", DEFAULT_TIMEOUT);
     printf("       --retries <N>        Retries (default %d)\n", DEFAULT_RETRY);
+    printf("       --proxy <PROXY>      Alias for --all-proxy\n");
+    printf("       --all-proxy <PROXY>  Proxy for all HTTP(S) downloads\n");
+    printf("       --http-proxy <PROXY> Proxy for HTTP downloads\n");
+    printf("       --https-proxy <PROXY> Proxy for HTTPS downloads\n");
+    printf("       --no-proxy <LIST>    Comma-separated hosts/domains/IP ranges\n");
     printf("  -h,  --help               Show help\n");
     printf("  -V,  --version            Show version\n\n");
     printf("Examples:\n");

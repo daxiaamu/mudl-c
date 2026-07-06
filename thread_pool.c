@@ -92,7 +92,7 @@ DWORD WINAPI worker_thread_func(LPVOID param) {
                  (long long)seg->end_offset);
 
         http_client_t http;
-        if (http_connect(&http, ctx->url, ctx->timeout_sec) != 0) {
+        if (http_connect(&http, ctx->url, ctx->timeout_sec, ctx->proxy) != 0) {
             warn("Worker %d: connect failed - %s", tid, http.last_error);
             segmgr_error(mgr, seg);
             http_close(&http);
