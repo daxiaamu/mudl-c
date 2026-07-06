@@ -41,4 +41,9 @@ int file_name_from_url(const char* url, char* name, int name_n,
 int file_make_safe_path(const char* dir, const char* name,
                         char* out, int out_n);
 
+/* Resolve -d/--dir and -o/--output into a final output path.
+ * output follows aria2 style: filename only, relative to dir. */
+int file_resolve_output_path(const char* url, const char* dir,
+                             const char* output, char* out, int out_n);
+
 #endif /* FILE_IO_H */

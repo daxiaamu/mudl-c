@@ -18,7 +18,7 @@
 ```bash
 mudl "https://example.com/file.zip"
 mudl -c 1 "https://example.com/file.zip"
-mudl -c 16 -o output.zip "https://example.com/file.iso"
+mudl -c 16 -d downloads -o output.zip "https://example.com/file.iso"
 mudl --progress line "https://example.com/file.zip"
 ```
 
@@ -54,7 +54,7 @@ Manual build:
 x86_64-w64-mingw32-gcc -std=c11 -O2 -Wall -Wextra -mconsole \
   -o mudl.exe main.c http.c file_io.c progress.c utils.c \
   segment.c thread_pool.c persist.c \
-  -lws2_32 -lshlwapi -lsecur32
+  -lws2_32 -lshlwapi -lsecur32 -lshell32
 strip mudl.exe
 ```
 

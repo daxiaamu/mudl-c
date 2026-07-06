@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+#include <windows.h>
+#include <shellapi.h>
 
 #include "utils.h"
 #include "http.h"
@@ -14,7 +16,7 @@
 #include "thread_pool.h"
 #include "persist.h"
 
-#define VERSION "0.5.2"
+#define VERSION "0.5.3"
 #define DEFAULT_CONNECTIONS 8
 #define DEFAULT_TIMEOUT 30
 #define DEFAULT_RETRY 5
@@ -26,8 +28,8 @@
 
 typedef struct {
     char        url[HTTP_MAX_URL];
-    char        output[256];
-    char        dir[MAX_PATH];
+    char        output[MAX_PATH * 2];
+    char        dir[MAX_PATH * 2];
     int         connections;
     int         timeout_sec;
     int         max_retries;
@@ -44,9 +46,13 @@ typedef struct {
 static volatile bool g_interrupted = false;
 
 static void parse_args(options_t* opts, int argc, char** argv);
+static void parse_embedded_args(options_t* opts, char* arg_tail);
+static void split_embedded_args(options_t* opts, char* value);
 static void print_help(void);
 static void print_version(void);
 static void sig_handler(int sig);
+static char** command_line_to_utf8_argv(int* out_argc);
+static void free_utf8_argv(char** argv, int argc);
 DWORD WINAPI engine_monitor_thread(LPVOID param);
 
 /* Fix Chinese output on Windows console */
@@ -62,6 +68,47 @@ static void init_console(void) {
         mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
         SetConsoleMode(h, mode);
     }
+}
+
+static char** command_line_to_utf8_argv(int* out_argc) {
+    int wargc = 0;
+    LPWSTR* wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
+    if (!wargv || wargc <= 0)
+        return NULL;
+
+    char** argv = (char**)calloc((size_t)wargc + 1, sizeof(char*));
+    if (!argv) {
+        LocalFree(wargv);
+        return NULL;
+    }
+
+    for (int i = 0; i < wargc; i++) {
+        int n = WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, NULL, 0, NULL, NULL);
+        if (n <= 0) {
+            free_utf8_argv(argv, i);
+            LocalFree(wargv);
+            return NULL;
+        }
+        argv[i] = (char*)calloc((size_t)n, 1);
+        if (!argv[i]) {
+            free_utf8_argv(argv, i);
+            LocalFree(wargv);
+            return NULL;
+        }
+        WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, argv[i], n, NULL, NULL);
+    }
+
+    argv[wargc] = NULL;
+    *out_argc = wargc;
+    LocalFree(wargv);
+    return argv;
+}
+
+static void free_utf8_argv(char** argv, int argc) {
+    if (!argv) return;
+    for (int i = 0; i < argc; i++)
+        free(argv[i]);
+    free(argv);
 }
 
 /* Single-thread fallback */
@@ -95,8 +142,21 @@ static void speed_tick(speed_tracker_t* st, int64_t total_downloaded);
 
 int main(int argc, char** argv) {
     init_console();
+
+    int parse_argc = argc;
+    char** parse_argv = argv;
+    bool argv_owned = false;
+    char** utf8_argv = command_line_to_utf8_argv(&parse_argc);
+    if (utf8_argv) {
+        parse_argv = utf8_argv;
+        argv_owned = true;
+    }
+
     options_t opts;
-    parse_args(&opts, argc, argv);
+    parse_args(&opts, parse_argc, parse_argv);
+    if (argv_owned) {
+        free_utf8_argv(parse_argv, parse_argc);
+    }
     if (opts.help) { print_help(); return 0; }
     if (opts.version) { print_version(); return 0; }
     if (opts.url[0] == 0) {
@@ -109,19 +169,13 @@ int main(int argc, char** argv) {
 
     http_global_init();
 
-    /* Determine output file path */
-    char filename[256];
-    if (opts.output[0]) {
-        strncpy(filename, opts.output, sizeof(filename) - 1);
-    } else {
-        file_name_from_url(opts.url, filename, sizeof(filename), NULL);
-        if (filename[0] == 0)
-            strncpy(filename, "download", sizeof(filename) - 1);
-    }
-
     char outpath[MAX_PATH * 2];
-    file_make_safe_path(opts.dir[0] ? opts.dir : ".", filename,
-                        outpath, sizeof(outpath));
+    if (file_resolve_output_path(opts.url, opts.dir, opts.output,
+                                 outpath, sizeof(outpath)) != 0) {
+        fprintf(stderr, "Error: -o/--output expects a filename only. Use -d/--dir for the output directory.\n");
+        http_global_cleanup();
+        return 1;
+    }
 
     printf("URL:     %s\n", opts.url);
     printf("Output:  %s\n", outpath);
@@ -629,9 +683,11 @@ static void parse_args(options_t* opts, int argc, char** argv) {
         }
         else if ((strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--output") == 0) && i+1 < argc) {
             strncpy(opts->output, argv[++i], sizeof(opts->output) - 1);
+            split_embedded_args(opts, opts->output);
         }
         else if ((strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--dir") == 0) && i+1 < argc) {
             strncpy(opts->dir, argv[++i], sizeof(opts->dir) - 1);
+            split_embedded_args(opts, opts->dir);
         }
         else if ((strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "--connections") == 0) && i+1 < argc) {
             opts->connections = atoi(argv[++i]);
@@ -673,6 +729,56 @@ static void parse_args(options_t* opts, int argc, char** argv) {
                 strncpy(opts->url, argv[i], sizeof(opts->url) - 1);
         }
     }
+}
+
+static void parse_embedded_args(options_t* opts, char* arg_tail) {
+    char* tokens[16];
+    int count = 0;
+
+    char* p = arg_tail;
+    while (*p && count < 16) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+        tokens[count++] = p;
+        while (*p && *p != ' ' && *p != '\t') p++;
+        if (*p) *p++ = 0;
+    }
+
+    for (int i = 0; i < count; i++) {
+        if ((strcmp(tokens[i], "-c") == 0 || strcmp(tokens[i], "--connections") == 0) && i + 1 < count) {
+            opts->connections = atoi(tokens[++i]);
+            if (opts->connections < 1) opts->connections = 1;
+            if (opts->connections > 32) opts->connections = 32;
+        } else if ((strcmp(tokens[i], "-p") == 0 || strcmp(tokens[i], "--progress") == 0) && i + 1 < count) {
+            i++;
+            if (strcmp(tokens[i], "bar") == 0) opts->progress_mode = PROGRESS_BAR;
+            else if (strcmp(tokens[i], "line") == 0) opts->progress_mode = PROGRESS_LINE;
+            else if (strcmp(tokens[i], "json") == 0) opts->progress_mode = PROGRESS_JSON;
+            else if (strcmp(tokens[i], "none") == 0 || strcmp(tokens[i], "quiet") == 0)
+                opts->progress_mode = PROGRESS_SILENT;
+        } else if (strcmp(tokens[i], "--timeout") == 0 && i + 1 < count) {
+            opts->timeout_sec = atoi(tokens[++i]);
+            if (opts->timeout_sec < 1) opts->timeout_sec = 1;
+        } else if (strcmp(tokens[i], "--retries") == 0 && i + 1 < count) {
+            opts->max_retries = atoi(tokens[++i]);
+            if (opts->max_retries < 0) opts->max_retries = 0;
+        } else if (strcmp(tokens[i], "-q") == 0 || strcmp(tokens[i], "--quiet") == 0) {
+            opts->quiet = true;
+            opts->progress_mode = PROGRESS_SILENT;
+        }
+    }
+}
+
+static void split_embedded_args(options_t* opts, char* value) {
+    char* q = strchr(value, '"');
+    if (!q) return;
+
+    char* tail = q + 1;
+    while (*tail == ' ' || *tail == '\t') tail++;
+    if (*tail != '-') return;
+
+    *q = 0;
+    parse_embedded_args(opts, tail);
 }
 
 static void print_help(void) {
