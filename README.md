@@ -57,8 +57,8 @@ Manual build:
 ```bash
 x86_64-w64-mingw32-gcc -std=c11 -O2 -Wall -Wextra -mconsole \
   -o mudl.exe main.c http.c file_io.c progress.c utils.c \
-  segment.c thread_pool.c persist.c \
-  -lws2_32 -lshlwapi -lsecur32 -lshell32
+  segment.c thread_pool.c persist.c checksum.c \
+  -lws2_32 -lshlwapi -lsecur32 -lshell32 -ladvapi32
 strip mudl.exe
 ```
 
@@ -75,6 +75,7 @@ strip mudl.exe
        --header <K:V>       Custom HTTP header (repeatable)
        --timeout <SEC>      Connection timeout (default 30)
        --retries <N>        Max retries per segment (default 5)
+       --checksum <TYPE=DIGEST> Verify file checksum after download
        --proxy <PROXY>      Alias for --all-proxy
        --all-proxy <PROXY>  Proxy for all HTTP(S) downloads
        --http-proxy <PROXY> Proxy for HTTP downloads
@@ -87,6 +88,18 @@ strip mudl.exe
 Use `--progress line` for background jobs or log files. It prints periodic full lines instead of rewriting the same console line.
 
 Custom headers may contain spaces when quoted by the shell, for example `--header "X-Test: hello world"`.
+
+## Checksum
+
+`--checksum` follows aria2 syntax: `TYPE=DIGEST`.
+
+```bash
+mudl --checksum sha-256=012345... "https://example.com/file.zip"
+```
+
+Supported types: `md5`, `sha-1`/`sha1`, `sha-256`/`sha256`, `sha-384`/`sha384`, and `sha-512`/`sha512`.
+
+Checksum verification runs after a complete download. A mismatch returns a non-zero exit code.
 
 ## Proxy
 
@@ -124,6 +137,7 @@ segment.c / .h    Segment manager
 thread_pool.c/.h  Worker thread pool
 progress.c / .h   Progress bar, line, and JSON output
 persist.c / .h    Resume state and CRC32 validation
+checksum.c / .h   Download checksum verification
 utils.c / .h      Formatting, tracing, and checksum helpers
 ```
 

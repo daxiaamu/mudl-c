@@ -15,8 +15,9 @@
 #include "segment.h"
 #include "thread_pool.h"
 #include "persist.h"
+#include "checksum.h"
 
-#define VERSION "0.5.5"
+#define VERSION "0.5.6"
 #define DEFAULT_CONNECTIONS 8
 #define DEFAULT_TIMEOUT 30
 #define DEFAULT_RETRY 5
@@ -40,6 +41,7 @@ typedef struct {
     char*       extra_headers[32];
     int         extra_count;
     proxy_config_t proxy;
+    char        checksum[256];
     bool        help;
     bool        version;
 } options_t;
@@ -265,6 +267,26 @@ int main(int argc, char** argv) {
         if (file_size > 0)
             printf("Using single-thread (connections=%d)\n\n", opts.connections);
         exit_code = download_single(&opts, outpath, path, file_size);
+    }
+
+    if (exit_code == 0 && opts.checksum[0]) {
+        char actual[160];
+        char err[256];
+        printf("Checksum: verifying %s\n", opts.checksum);
+        int cr = checksum_verify_file(outpath, opts.checksum,
+                                      actual, sizeof(actual),
+                                      err, sizeof(err));
+        if (cr < 0) {
+            fprintf(stderr, "Checksum error: %s\n", err);
+            exit_code = 5;
+        } else if (cr > 0) {
+            fprintf(stderr, "Checksum mismatch: expected %s, actual %s\n",
+                    strchr(opts.checksum, '=') ? strchr(opts.checksum, '=') + 1 : opts.checksum,
+                    actual);
+            exit_code = 5;
+        } else {
+            printf("Checksum OK: %s\n", actual);
+        }
     }
 
     http_global_cleanup();
@@ -738,6 +760,12 @@ static void parse_args(options_t* opts, int argc, char** argv) {
             opts->max_retries = atoi(argv[++i]);
             if (opts->max_retries < 0) opts->max_retries = 0;
         }
+        else if (strcmp(argv[i], "--checksum") == 0 && i+1 < argc) {
+            strncpy(opts->checksum, argv[++i], sizeof(opts->checksum) - 1);
+        }
+        else if (strncmp(argv[i], "--checksum=", 11) == 0) {
+            strncpy(opts->checksum, argv[i] + 11, sizeof(opts->checksum) - 1);
+        }
         else if ((strcmp(argv[i], "--proxy") == 0 || strcmp(argv[i], "--all-proxy") == 0) && i+1 < argc) {
             set_proxy_option(&opts->proxy.all, argv[++i]);
         }
@@ -797,6 +825,10 @@ static void parse_embedded_args(options_t* opts, char* arg_tail) {
         } else if (strcmp(tokens[i], "--retries") == 0 && i + 1 < count) {
             opts->max_retries = atoi(tokens[++i]);
             if (opts->max_retries < 0) opts->max_retries = 0;
+        } else if (strcmp(tokens[i], "--checksum") == 0 && i + 1 < count) {
+            strncpy(opts->checksum, tokens[++i], sizeof(opts->checksum) - 1);
+        } else if (strncmp(tokens[i], "--checksum=", 11) == 0) {
+            strncpy(opts->checksum, tokens[i] + 11, sizeof(opts->checksum) - 1);
         } else if ((strcmp(tokens[i], "--proxy") == 0 || strcmp(tokens[i], "--all-proxy") == 0) && i + 1 < count) {
             set_proxy_option(&opts->proxy.all, tokens[++i]);
         } else if (strcmp(tokens[i], "--http-proxy") == 0 && i + 1 < count) {
@@ -839,6 +871,7 @@ static void print_help(void) {
     printf("       --header <K:V>       Custom HTTP header (repeatable)\n");
     printf("       --timeout <SEC>      Timeout (default %d)\n", DEFAULT_TIMEOUT);
     printf("       --retries <N>        Retries (default %d)\n", DEFAULT_RETRY);
+    printf("       --checksum <TYPE=DIGEST> Verify file checksum after download\n");
     printf("       --proxy <PROXY>      Alias for --all-proxy\n");
     printf("       --all-proxy <PROXY>  Proxy for all HTTP(S) downloads\n");
     printf("       --http-proxy <PROXY> Proxy for HTTP downloads\n");
