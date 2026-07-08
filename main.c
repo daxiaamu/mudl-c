@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <signal.h>
 #include <windows.h>
 #include <shellapi.h>
@@ -17,7 +18,7 @@
 #include "persist.h"
 #include "checksum.h"
 
-#define VERSION "0.5.6"
+#define VERSION "0.5.7"
 #define DEFAULT_CONNECTIONS 8
 #define DEFAULT_TIMEOUT 30
 #define DEFAULT_RETRY 5
@@ -48,30 +49,76 @@ typedef struct {
 
 static volatile bool g_interrupted = false;
 
+typedef struct {
+    UINT input_cp;
+    UINT output_cp;
+    HANDLE output_handle;
+    DWORD output_mode;
+    bool has_output_mode;
+    bool initialized;
+} console_state_t;
+
+static console_state_t g_console_state = {0};
+
 static void parse_args(options_t* opts, int argc, char** argv);
 static void parse_embedded_args(options_t* opts, char* arg_tail);
 static void split_embedded_args(options_t* opts, char* value);
+static char* trim_token_quotes(char* s);
+static void infof(const options_t* opts, const char* fmt, ...);
 static void set_proxy_option(proxy_endpoint_t* dst, const char* value);
 static void print_help(void);
 static void print_version(void);
 static void sig_handler(int sig);
 static char** command_line_to_utf8_argv(int* out_argc);
 static void free_utf8_argv(char** argv, int argc);
+static void restore_console(void);
 DWORD WINAPI engine_monitor_thread(LPVOID param);
 
 /* Fix Chinese output on Windows console */
 static void init_console(void) {
     setbuf(stdout, NULL);
     setbuf(stderr, NULL);
+
+    g_console_state.input_cp = GetConsoleCP();
+    g_console_state.output_cp = GetConsoleOutputCP();
+    g_console_state.output_handle = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (g_console_state.output_handle != INVALID_HANDLE_VALUE &&
+        GetConsoleMode(g_console_state.output_handle, &g_console_state.output_mode)) {
+        g_console_state.has_output_mode = true;
+    }
+    g_console_state.initialized = true;
+    atexit(restore_console);
+
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
     /* Enable VT escape sequences */
-    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD mode;
-    if (GetConsoleMode(h, &mode)) {
+    if (g_console_state.has_output_mode) {
+        mode = g_console_state.output_mode;
         mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
-        SetConsoleMode(h, mode);
+        SetConsoleMode(g_console_state.output_handle, mode);
     }
+}
+
+static void restore_console(void) {
+    if (!g_console_state.initialized)
+        return;
+    if (g_console_state.output_cp)
+        SetConsoleOutputCP(g_console_state.output_cp);
+    if (g_console_state.input_cp)
+        SetConsoleCP(g_console_state.input_cp);
+    if (g_console_state.has_output_mode)
+        SetConsoleMode(g_console_state.output_handle, g_console_state.output_mode);
+}
+
+static void infof(const options_t* opts, const char* fmt, ...) {
+    if (opts && opts->quiet)
+        return;
+
+    va_list ap;
+    va_start(ap, fmt);
+    vprintf(fmt, ap);
+    va_end(ap);
 }
 
 static char** command_line_to_utf8_argv(int* out_argc) {
@@ -181,9 +228,9 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    printf("URL:     %s\n", opts.url);
-    printf("Output:  %s\n", outpath);
-    printf("Threads: %d\n\n", opts.connections);
+    infof(&opts, "URL:     %s\n", opts.url);
+    infof(&opts, "Output:  %s\n", outpath);
+    infof(&opts, "Threads: %d\n\n", opts.connections);
 
     char scheme[16], host[256], path[HTTP_MAX_PATH];
     int port;
@@ -192,7 +239,7 @@ int main(int argc, char** argv) {
 
     /* Probe: GET with Range: bytes=0- to check if server supports Range
        OSS signed URLs reject HEAD (403) but work fine with GET. */
-    printf("Downloading directly (skipping HEAD probe)\n\n");
+    infof(&opts, "Downloading directly (skipping HEAD probe)\n\n");
 
     int exit_code;
     http_client_t probe;
@@ -219,7 +266,7 @@ int main(int argc, char** argv) {
            probe_resp.status_code == 308) &&
            probe_resp.location[0] && redirect_count < 5) {
         redirect_count++;
-        printf("Redirect %d: %s\n", redirect_count, probe_resp.location);
+        infof(&opts, "Redirect %d: %s\n", redirect_count, probe_resp.location);
         http_close(&probe);
 
         snprintf(opts.url, sizeof(opts.url), "%s", probe_resp.location);
@@ -252,11 +299,11 @@ int main(int argc, char** argv) {
     if (probe_resp.status_code == 206) {
         file_size = probe_resp.content_range_total;
         multi_supported = true;
-        printf("Server supports Range (file size: %lld bytes)\n",
+        infof(&opts, "Server supports Range (file size: %lld bytes)\n",
                (long long)file_size);
     } else if (probe_resp.status_code == 200 && probe_resp.content_length > 0) {
         file_size = probe_resp.content_length;
-        printf("File size from Content-Length: %lld bytes\n",
+        infof(&opts, "File size from Content-Length: %lld bytes\n",
                (long long)file_size);
         }
     http_close(&probe);
@@ -265,14 +312,14 @@ int main(int argc, char** argv) {
         exit_code = download_multi(&opts, outpath, path, file_size);
     } else {
         if (file_size > 0)
-            printf("Using single-thread (connections=%d)\n\n", opts.connections);
+            infof(&opts, "Using single-thread (connections=%d)\n\n", opts.connections);
         exit_code = download_single(&opts, outpath, path, file_size);
     }
 
     if (exit_code == 0 && opts.checksum[0]) {
         char actual[160];
         char err[256];
-        printf("Checksum: verifying %s\n", opts.checksum);
+        infof(&opts, "Checksum: verifying %s\n", opts.checksum);
         int cr = checksum_verify_file(outpath, opts.checksum,
                                       actual, sizeof(actual),
                                       err, sizeof(err));
@@ -285,7 +332,7 @@ int main(int argc, char** argv) {
                     actual);
             exit_code = 5;
         } else {
-            printf("Checksum OK: %s\n", actual);
+            infof(&opts, "Checksum OK: %s\n", actual);
         }
     }
 
@@ -308,7 +355,7 @@ static int download_single(options_t* opts, const char* outpath,
         if (persist_load(segpath, &tmp_mgr, file_size, NULL) == 0 && tmp_mgr.segment_count > 0) {
             resume_pos = tmp_mgr.segments[0].downloaded;
             resume_crc32 = tmp_mgr.segments[0].crc32;
-            printf("Resuming at byte %lld (%.1f%%)\n",
+            infof(opts, "Resuming at byte %lld (%.1f%%)\n",
                    (long long)resume_pos,
                    (double)resume_pos / file_size * 100.0);
             segmgr_destroy(&tmp_mgr);
@@ -319,7 +366,7 @@ static int download_single(options_t* opts, const char* outpath,
         }
     }
 
-    printf("Method:  single-thread%s\n\n",
+    infof(opts, "Method:  single-thread%s\n\n",
            resumed ? " (resume)" : "");
     http_client_t cli;
     if (http_connect(&cli, opts->url, opts->timeout_sec, &opts->proxy) != 0) {
@@ -362,7 +409,7 @@ static int download_single(options_t* opts, const char* outpath,
            get_resp.status_code == 307 || get_resp.status_code == 308) &&
            get_resp.location[0] && redirect_count < 5) {
         redirect_count++;
-        printf("Redirect %d: %s\n", redirect_count, get_resp.location);
+        infof(opts, "Redirect %d: %s\n", redirect_count, get_resp.location);
         http_close(&cli);
 
         /* Update URL and reconnect */
@@ -473,7 +520,7 @@ static int download_single(options_t* opts, const char* outpath,
                 free(save_mgr.segments);
             }
         }
-        printf("\nPaused. Run again with new URL to resume.\n");
+        infof(opts, "\nPaused. Run again with new URL to resume.\n");
         return 4;
     }
 
@@ -508,7 +555,7 @@ static int download_single(options_t* opts, const char* outpath,
 
     /* Remove resume file on clean completion */
     if (file_size > 0) persist_remove(segpath);
-    if (opts->progress_mode == PROGRESS_BAR) {
+    if (opts->progress_mode == PROGRESS_BAR && !opts->quiet) {
         printf("DONE: %s (%lld bytes)\n", outpath, (long long)downloaded);
     }
     return 0;
@@ -518,7 +565,7 @@ static int download_single(options_t* opts, const char* outpath,
 static int download_multi(options_t* opts, const char* outpath,
                           const char* path, int64_t total_size) {
     int conn = opts->connections;
-    printf("Method:  multi-thread (%d connections)\n\n", conn);
+    infof(opts, "Method:  multi-thread (%d connections)\n\n", conn);
 
     /* Build segments.bin path */
     char segpath[MAX_PATH * 2];
@@ -531,13 +578,13 @@ static int download_multi(options_t* opts, const char* outpath,
         trace("Resume file found: %s", segpath);
         int64_t existing_size = file_size(outpath);
         if (existing_size < 0) {
-            printf("Resume state ignored: output file is missing\n");
+            infof(opts, "Resume state ignored: output file is missing\n");
         } else if (existing_size < total_size) {
-            printf("Resume state ignored: output file is smaller than expected\n");
+            infof(opts, "Resume state ignored: output file is smaller than expected\n");
         } else {
             memset(&segmgr, 0, sizeof(segmgr));
             if (persist_load(segpath, &segmgr, total_size, NULL) == 0) {
-                printf("Resuming from segments.bin (%d segments, %lld pending)\n",
+                infof(opts, "Resuming from segments.bin (%d segments, %lld pending)\n",
                        segmgr.segment_count,
                        (long long)(segmgr.segment_count - segmgr.complete_count));
                 resumed = true;
@@ -553,7 +600,7 @@ static int download_multi(options_t* opts, const char* outpath,
             fprintf(stderr, "Error: failed to init segment manager\n");
             return 1;
         }
-        printf("Segments: %d\n", segmgr.segment_count);
+        infof(opts, "Segments: %d\n", segmgr.segment_count);
     }
 
     /* Open output file (must exist for resume) */
@@ -596,7 +643,7 @@ static int download_multi(options_t* opts, const char* outpath,
         return 1;
     }
 
-    printf("Started %d workers\n", actual_count);
+    infof(opts, "Started %d workers\n", actual_count);
 
     /* Progress / monitor loop */
     progress_t prog;
@@ -640,7 +687,7 @@ static int download_multi(options_t* opts, const char* outpath,
     } else if (!g_interrupted) {
         progress_update(&prog, final_total, 0, 0, actual_count);
         progress_done(&prog);
-        if (opts->progress_mode == PROGRESS_BAR) {
+        if (opts->progress_mode == PROGRESS_BAR && !opts->quiet) {
             printf("DONE: %s (%lld bytes)\n", outpath, (long long)final_total);
         }
     }
@@ -656,7 +703,7 @@ static int download_multi(options_t* opts, const char* outpath,
         /* Save state for resume on Ctrl+C */
         persist_save(segpath, &segmgr, total_size, conn);
         file_close(&output_file);
-        printf("\nPaused. Run again with same URL/args to resume.\n");
+        infof(opts, "\nPaused. Run again with same URL/args to resume.\n");
         segmgr_destroy(&segmgr);
         return 4;
     }
@@ -718,7 +765,6 @@ static void parse_args(options_t* opts, int argc, char** argv) {
         }
         else if (strcmp(argv[i], "-q") == 0 || strcmp(argv[i], "--quiet") == 0) {
             opts->quiet = true;
-            opts->progress_mode = PROGRESS_SILENT;
         }
         else if ((strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--output") == 0) && i+1 < argc) {
             strncpy(opts->output, argv[++i], sizeof(opts->output) - 1);
@@ -794,52 +840,150 @@ static void set_proxy_option(proxy_endpoint_t* dst, const char* value) {
         die("%s", err);
 }
 
+static char* trim_token_quotes(char* s) {
+    if (!s) return s;
+
+    while (*s == '"')
+        s++;
+
+    size_t len = strlen(s);
+    while (len > 0 && s[len - 1] == '"') {
+        s[len - 1] = 0;
+        len--;
+    }
+
+    return s;
+}
+
 static void parse_embedded_args(options_t* opts, char* arg_tail) {
-    char* tokens[16];
+    char* tokens[64];
     int count = 0;
 
     char* p = arg_tail;
-    while (*p && count < 16) {
+    while (*p && count < 64) {
         while (*p == ' ' || *p == '\t') p++;
         if (!*p) break;
-        tokens[count++] = p;
-        while (*p && *p != ' ' && *p != '\t') p++;
+
+        if (*p == '"') {
+            p++;
+            tokens[count++] = p;
+            while (*p && *p != '"') p++;
+        } else {
+            tokens[count++] = p;
+            while (*p && *p != ' ' && *p != '\t') p++;
+        }
+
         if (*p) *p++ = 0;
     }
 
     for (int i = 0; i < count; i++) {
-        if ((strcmp(tokens[i], "-c") == 0 || strcmp(tokens[i], "--connections") == 0) && i + 1 < count) {
-            opts->connections = atoi(tokens[++i]);
+        tokens[i] = trim_token_quotes(tokens[i]);
+    }
+
+    for (int i = 0; i < count; i++) {
+        char* tok = tokens[i];
+        if (!tok || !tok[0])
+            continue;
+
+        if ((strcmp(tok, "-o") == 0 || strcmp(tok, "--output") == 0) && i + 1 < count) {
+            char* value = trim_token_quotes(tokens[++i]);
+            strncpy(opts->output, value, sizeof(opts->output) - 1);
+            opts->output[sizeof(opts->output) - 1] = 0;
+        } else if (strncmp(tok, "--output=", 9) == 0) {
+            strncpy(opts->output, trim_token_quotes(tok + 9), sizeof(opts->output) - 1);
+            opts->output[sizeof(opts->output) - 1] = 0;
+        } else if ((strcmp(tok, "-d") == 0 || strcmp(tok, "--dir") == 0) && i + 1 < count) {
+            char* value = trim_token_quotes(tokens[++i]);
+            strncpy(opts->dir, value, sizeof(opts->dir) - 1);
+            opts->dir[sizeof(opts->dir) - 1] = 0;
+        } else if (strncmp(tok, "--dir=", 6) == 0) {
+            strncpy(opts->dir, trim_token_quotes(tok + 6), sizeof(opts->dir) - 1);
+            opts->dir[sizeof(opts->dir) - 1] = 0;
+        } else if ((strcmp(tok, "-c") == 0 || strcmp(tok, "--connections") == 0) && i + 1 < count) {
+            opts->connections = atoi(trim_token_quotes(tokens[++i]));
             if (opts->connections < 1) opts->connections = 1;
             if (opts->connections > 32) opts->connections = 32;
-        } else if ((strcmp(tokens[i], "-p") == 0 || strcmp(tokens[i], "--progress") == 0) && i + 1 < count) {
+        } else if (strncmp(tok, "--connections=", 14) == 0) {
+            opts->connections = atoi(trim_token_quotes(tok + 14));
+            if (opts->connections < 1) opts->connections = 1;
+            if (opts->connections > 32) opts->connections = 32;
+        } else if ((strcmp(tok, "-p") == 0 || strcmp(tok, "--progress") == 0) && i + 1 < count) {
             i++;
             if (strcmp(tokens[i], "bar") == 0) opts->progress_mode = PROGRESS_BAR;
             else if (strcmp(tokens[i], "line") == 0) opts->progress_mode = PROGRESS_LINE;
             else if (strcmp(tokens[i], "json") == 0) opts->progress_mode = PROGRESS_JSON;
             else if (strcmp(tokens[i], "none") == 0 || strcmp(tokens[i], "quiet") == 0)
                 opts->progress_mode = PROGRESS_SILENT;
-        } else if (strcmp(tokens[i], "--timeout") == 0 && i + 1 < count) {
-            opts->timeout_sec = atoi(tokens[++i]);
+        } else if (strncmp(tok, "--progress=", 11) == 0) {
+            char* value = trim_token_quotes(tok + 11);
+            if (strcmp(value, "bar") == 0) opts->progress_mode = PROGRESS_BAR;
+            else if (strcmp(value, "line") == 0) opts->progress_mode = PROGRESS_LINE;
+            else if (strcmp(value, "json") == 0) opts->progress_mode = PROGRESS_JSON;
+            else if (strcmp(value, "none") == 0 || strcmp(value, "quiet") == 0)
+                opts->progress_mode = PROGRESS_SILENT;
+        } else if ((strcmp(tok, "-ua") == 0 || strcmp(tok, "--user-agent") == 0) && i + 1 < count) {
+            char* value = trim_token_quotes(tokens[++i]);
+            strncpy(opts->user_agent, value, sizeof(opts->user_agent) - 1);
+            opts->user_agent[sizeof(opts->user_agent) - 1] = 0;
+        } else if (strncmp(tok, "--user-agent=", 13) == 0) {
+            strncpy(opts->user_agent, trim_token_quotes(tok + 13), sizeof(opts->user_agent) - 1);
+            opts->user_agent[sizeof(opts->user_agent) - 1] = 0;
+        } else if (strcmp(tok, "--referer") == 0 && i + 1 < count) {
+            char* value = trim_token_quotes(tokens[++i]);
+            strncpy(opts->referer, value, sizeof(opts->referer) - 1);
+            opts->referer[sizeof(opts->referer) - 1] = 0;
+        } else if (strncmp(tok, "--referer=", 10) == 0) {
+            strncpy(opts->referer, trim_token_quotes(tok + 10), sizeof(opts->referer) - 1);
+            opts->referer[sizeof(opts->referer) - 1] = 0;
+        } else if (strcmp(tok, "--header") == 0 && i + 1 < count) {
+            if (opts->extra_count < 32)
+                opts->extra_headers[opts->extra_count++] = _strdup(trim_token_quotes(tokens[++i]));
+        } else if (strncmp(tok, "--header=", 9) == 0) {
+            if (opts->extra_count < 32)
+                opts->extra_headers[opts->extra_count++] = _strdup(trim_token_quotes(tok + 9));
+        } else if (strcmp(tok, "--timeout") == 0 && i + 1 < count) {
+            opts->timeout_sec = atoi(trim_token_quotes(tokens[++i]));
             if (opts->timeout_sec < 1) opts->timeout_sec = 1;
-        } else if (strcmp(tokens[i], "--retries") == 0 && i + 1 < count) {
-            opts->max_retries = atoi(tokens[++i]);
+        } else if (strncmp(tok, "--timeout=", 10) == 0) {
+            opts->timeout_sec = atoi(trim_token_quotes(tok + 10));
+            if (opts->timeout_sec < 1) opts->timeout_sec = 1;
+        } else if (strcmp(tok, "--retries") == 0 && i + 1 < count) {
+            opts->max_retries = atoi(trim_token_quotes(tokens[++i]));
             if (opts->max_retries < 0) opts->max_retries = 0;
-        } else if (strcmp(tokens[i], "--checksum") == 0 && i + 1 < count) {
-            strncpy(opts->checksum, tokens[++i], sizeof(opts->checksum) - 1);
-        } else if (strncmp(tokens[i], "--checksum=", 11) == 0) {
-            strncpy(opts->checksum, tokens[i] + 11, sizeof(opts->checksum) - 1);
-        } else if ((strcmp(tokens[i], "--proxy") == 0 || strcmp(tokens[i], "--all-proxy") == 0) && i + 1 < count) {
-            set_proxy_option(&opts->proxy.all, tokens[++i]);
-        } else if (strcmp(tokens[i], "--http-proxy") == 0 && i + 1 < count) {
-            set_proxy_option(&opts->proxy.http, tokens[++i]);
-        } else if (strcmp(tokens[i], "--https-proxy") == 0 && i + 1 < count) {
-            set_proxy_option(&opts->proxy.https, tokens[++i]);
-        } else if (strcmp(tokens[i], "--no-proxy") == 0 && i + 1 < count) {
-            strncpy(opts->proxy.no_proxy, tokens[++i], sizeof(opts->proxy.no_proxy) - 1);
-        } else if (strcmp(tokens[i], "-q") == 0 || strcmp(tokens[i], "--quiet") == 0) {
+        } else if (strncmp(tok, "--retries=", 10) == 0) {
+            opts->max_retries = atoi(trim_token_quotes(tok + 10));
+            if (opts->max_retries < 0) opts->max_retries = 0;
+        } else if (strcmp(tok, "--checksum") == 0 && i + 1 < count) {
+            strncpy(opts->checksum, trim_token_quotes(tokens[++i]), sizeof(opts->checksum) - 1);
+            opts->checksum[sizeof(opts->checksum) - 1] = 0;
+        } else if (strncmp(tok, "--checksum=", 11) == 0) {
+            strncpy(opts->checksum, trim_token_quotes(tok + 11), sizeof(opts->checksum) - 1);
+            opts->checksum[sizeof(opts->checksum) - 1] = 0;
+        } else if ((strcmp(tok, "--proxy") == 0 || strcmp(tok, "--all-proxy") == 0) && i + 1 < count) {
+            set_proxy_option(&opts->proxy.all, trim_token_quotes(tokens[++i]));
+        } else if (strncmp(tok, "--proxy=", 8) == 0) {
+            set_proxy_option(&opts->proxy.all, trim_token_quotes(tok + 8));
+        } else if (strncmp(tok, "--all-proxy=", 12) == 0) {
+            set_proxy_option(&opts->proxy.all, trim_token_quotes(tok + 12));
+        } else if (strcmp(tok, "--http-proxy") == 0 && i + 1 < count) {
+            set_proxy_option(&opts->proxy.http, trim_token_quotes(tokens[++i]));
+        } else if (strncmp(tok, "--http-proxy=", 13) == 0) {
+            set_proxy_option(&opts->proxy.http, trim_token_quotes(tok + 13));
+        } else if (strcmp(tok, "--https-proxy") == 0 && i + 1 < count) {
+            set_proxy_option(&opts->proxy.https, trim_token_quotes(tokens[++i]));
+        } else if (strncmp(tok, "--https-proxy=", 14) == 0) {
+            set_proxy_option(&opts->proxy.https, trim_token_quotes(tok + 14));
+        } else if (strcmp(tok, "--no-proxy") == 0 && i + 1 < count) {
+            strncpy(opts->proxy.no_proxy, trim_token_quotes(tokens[++i]), sizeof(opts->proxy.no_proxy) - 1);
+            opts->proxy.no_proxy[sizeof(opts->proxy.no_proxy) - 1] = 0;
+        } else if (strncmp(tok, "--no-proxy=", 11) == 0) {
+            strncpy(opts->proxy.no_proxy, trim_token_quotes(tok + 11), sizeof(opts->proxy.no_proxy) - 1);
+            opts->proxy.no_proxy[sizeof(opts->proxy.no_proxy) - 1] = 0;
+        } else if (strcmp(tok, "-q") == 0 || strcmp(tok, "--quiet") == 0) {
             opts->quiet = true;
-            opts->progress_mode = PROGRESS_SILENT;
+        } else if (tok[0] != '-' && opts->url[0] == 0) {
+            strncpy(opts->url, tok, sizeof(opts->url) - 1);
+            opts->url[sizeof(opts->url) - 1] = 0;
         }
     }
 }
@@ -864,7 +1008,7 @@ static void print_help(void) {
     printf("  -o,  --output <FILE>      Output filename\n");
     printf("  -d,  --dir <DIR>          Output directory\n");
     printf("  -c,  --connections <N>    Connections (default %d, 1-32)\n", DEFAULT_CONNECTIONS);
-    printf("  -q,  --quiet              Quiet mode\n");
+    printf("  -q,  --quiet              Hide detail logs, keep progress\n");
     printf("  -p,  --progress <FORMAT>  Progress: bar|line|json|none\n");
     printf("  -ua, --user-agent <UA>    Custom User-Agent\n");
     printf("       --referer <URL>      Referer\n");

@@ -68,7 +68,7 @@ strip mudl.exe
   -o,  --output <FILE>      Output filename
   -d,  --dir <DIR>          Output directory
   -c,  --connections <N>    Threads (default 8, max 32)
-  -q,  --quiet              Silent mode
+  -q,  --quiet              Hide detail logs, keep progress
   -p,  --progress <FORMAT>  Progress format: bar | line | json | none
   -ua, --user-agent <UA>    Custom User-Agent
        --referer <URL>      Custom Referer
@@ -85,17 +85,20 @@ strip mudl.exe
   -V,  --version            Show version
 ```
 
-Use `--progress line` for background jobs or log files. It prints periodic full lines instead of rewriting the same console line.
+Use `-q`/`--quiet` for scripts that should hide detail logs while keeping progress visible. Use `--progress none` for fully silent downloads. Use `--progress line` for background jobs or log files. It prints periodic full lines instead of rewriting the same console line.
 
 Custom headers may contain spaces when quoted by the shell, for example `--header "X-Test: hello world"`.
 
 ## Checksum
 
-`--checksum` follows aria2 syntax: `TYPE=DIGEST`.
+`--checksum` follows aria2 syntax: `--checksum=<TYPE>=<DIGEST>`.
 
 ```bash
+mudl --checksum=sha-256=012345... "https://example.com/file.zip"
 mudl --checksum sha-256=012345... "https://example.com/file.zip"
 ```
+
+The space-separated form is also accepted for convenience, but the aria2-compatible form uses `=`.
 
 Supported types: `md5`, `sha-1`/`sha1`, `sha-256`/`sha256`, `sha-384`/`sha384`, and `sha-512`/`sha512`.
 
