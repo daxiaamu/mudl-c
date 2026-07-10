@@ -127,7 +127,8 @@ int checksum_verify_file(const char* path, const char* spec,
 
     unsigned char buf[65536];
     DWORD got = 0;
-    while (ReadFile(file, buf, sizeof(buf), &got, NULL) && got > 0) {
+    BOOL read_ok = TRUE;
+    while ((read_ok = ReadFile(file, buf, sizeof(buf), &got, NULL)) && got > 0) {
         if (!CryptHashData(hash, buf, got, 0)) {
             snprintf(err, err_n, "CryptHashData failed: %lu", GetLastError());
             CryptDestroyHash(hash);
@@ -135,6 +136,13 @@ int checksum_verify_file(const char* path, const char* spec,
             CloseHandle(file);
             return -1;
         }
+    }
+    if (!read_ok) {
+        snprintf(err, err_n, "ReadFile failed during checksum: %lu", GetLastError());
+        CryptDestroyHash(hash);
+        CryptReleaseContext(prov, 0);
+        CloseHandle(file);
+        return -1;
     }
 
     DWORD hash_len = 0;

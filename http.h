@@ -36,6 +36,8 @@ typedef struct {
     bool        accept_ranges;
     char        location[HTTP_MAX_URL];
     char        content_type[128];
+    char        etag[256];
+    char        last_modified[128];
     char        headers[HTTP_MAX_HEADERS];
     bool        is_chunked;
 } http_response_t;
@@ -66,6 +68,9 @@ typedef struct {
     int         timeout_sec;
     char        last_error[256];
     void*       ssl_ctx;       /* SChannel SSL context, NULL if plain HTTP */
+    bool        body_chunked;
+    bool        chunk_done;
+    int64_t     chunk_remaining;
 } http_client_t;
 
 int http_global_init(void);

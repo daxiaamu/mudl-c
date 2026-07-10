@@ -18,6 +18,7 @@ typedef struct {
     const char** extra_headers;
     int          extra_count;
     int          timeout_sec;
+    const char*  resource_validator;
     const proxy_config_t* proxy;
     segment_manager_t* segmgr;
     file_t*      output_file;

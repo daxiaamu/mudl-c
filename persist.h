@@ -7,17 +7,19 @@
 
 /* segments.bin header magic: "MUDL" */
 #define PERSIST_MAGIC 0x4D55444D
-#define PERSIST_VERSION 2
+#define PERSIST_VERSION 3
 
 /* Persist segment state to file.
  * Returns 0 on success, -1 on error. */
-int persist_save(const char* path, segment_manager_t* mgr, int64_t file_size, int thread_count);
+int persist_save(const char* path, segment_manager_t* mgr, int64_t file_size,
+                 int thread_count, const char* validator);
 
 /* Load segment state from file.
  * Allocates and populates mgr->segments and mgr->pending_queue.
  * Returns 0 on success, -1 on error/file not found.
  * If thread_count is not NULL, receives the saved thread count. */
-int persist_load(const char* path, segment_manager_t* mgr, int64_t file_size, int* thread_count);
+int persist_load(const char* path, segment_manager_t* mgr, int64_t file_size,
+                 int* thread_count, const char* validator);
 
 /* Check if a resume file exists for the given download path */
 bool persist_exists(const char* segfile_path);

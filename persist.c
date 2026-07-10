@@ -21,6 +21,7 @@ typedef struct {
     uint32_t thread_count;  /* saved thread count for resume */
     uint32_t pad;           /* alignment */
     uint64_t timestamp;
+    char     validator[256]; /* ETag or Last-Modified from the remote object */
 } persist_header_t;
 
 typedef struct {
@@ -96,7 +97,8 @@ bool persist_exists(const char* segfile_path) {
     return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
 }
 
-int persist_save(const char* path, segment_manager_t* mgr, int64_t file_size, int thread_count) {
+int persist_save(const char* path, segment_manager_t* mgr, int64_t file_size,
+                 int thread_count, const char* validator) {
     /* Save to .tmp first, then rename (atomic write) */
     char tmp_path[MAX_PATH * 2];
     _snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
@@ -127,6 +129,8 @@ int persist_save(const char* path, segment_manager_t* mgr, int64_t file_size, in
     hdr.segment_count = mgr->segment_count;
     hdr.thread_count = thread_count;
     hdr.timestamp = GetTickCount64();
+    if (validator)
+        snprintf(hdr.validator, sizeof(hdr.validator), "%s", validator);
 
     if (!WriteFile(hFile, &hdr, sizeof(hdr), &written, NULL) || written != sizeof(hdr)) {
         CloseHandle(hFile); DeleteFileW(wtmp_path);
@@ -168,7 +172,8 @@ int persist_save(const char* path, segment_manager_t* mgr, int64_t file_size, in
     return 0;
 }
 
-int persist_load(const char* path, segment_manager_t* mgr, int64_t file_size, int* thread_count) {
+int persist_load(const char* path, segment_manager_t* mgr, int64_t file_size,
+                 int* thread_count, const char* validator) {
     wchar_t wpath[MAX_PATH * 2];
     if (utf8_to_wide(path, wpath, (int)(sizeof(wpath) / sizeof(wpath[0]))) != 0)
         return -1;
@@ -194,6 +199,14 @@ int persist_load(const char* path, segment_manager_t* mgr, int64_t file_size, in
     if (hdr.file_size != file_size) {
         trace("persist: file size mismatch (saved=%lld, actual=%lld)",
               (long long)hdr.file_size, (long long)file_size);
+        CloseHandle(hFile); return -1;
+    }
+
+    /* Size alone cannot distinguish a same-sized replacement. */
+    if (!validator || !validator[0] || !hdr.validator[0] ||
+        strcmp(hdr.validator, validator) != 0) {
+        trace("persist: remote validator missing or changed");
+        printf("Resume check: remote file identity changed or unavailable; restarting download\n");
         CloseHandle(hFile); return -1;
     }
 

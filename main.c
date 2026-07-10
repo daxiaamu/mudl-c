@@ -43,6 +43,7 @@ typedef struct {
     int         extra_count;
     proxy_config_t proxy;
     char        checksum[256];
+    char        resource_validator[256];
     bool        help;
     bool        version;
 } options_t;
@@ -72,6 +73,7 @@ static void sig_handler(int sig);
 static char** command_line_to_utf8_argv(int* out_argc);
 static void free_utf8_argv(char** argv, int argc);
 static void restore_console(void);
+static void response_validator(const http_response_t* resp, char* out, int out_n);
 DWORD WINAPI engine_monitor_thread(LPVOID param);
 
 /* Fix Chinese output on Windows console */
@@ -119,6 +121,14 @@ static void infof(const options_t* opts, const char* fmt, ...) {
     va_start(ap, fmt);
     vprintf(fmt, ap);
     va_end(ap);
+}
+
+static void response_validator(const http_response_t* resp, char* out, int out_n) {
+    out[0] = 0;
+    if (resp->etag[0])
+        snprintf(out, out_n, "etag:%s", resp->etag);
+    else if (resp->last_modified[0])
+        snprintf(out, out_n, "last-modified:%s", resp->last_modified);
 }
 
 static char** command_line_to_utf8_argv(int* out_argc) {
@@ -296,7 +306,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    if (probe_resp.status_code == 206) {
+    if (probe_resp.status_code == 206 && probe_resp.content_range_total > 0) {
         file_size = probe_resp.content_range_total;
         multi_supported = true;
         infof(&opts, "Server supports Range (file size: %lld bytes)\n",
@@ -305,7 +315,14 @@ int main(int argc, char** argv) {
         file_size = probe_resp.content_length;
         infof(&opts, "File size from Content-Length: %lld bytes\n",
                (long long)file_size);
-        }
+    } else if (probe_resp.status_code != 200) {
+        fprintf(stderr, "Error: HTTP status %d\n", probe_resp.status_code);
+        http_close(&probe);
+        http_global_cleanup();
+        return 1;
+    }
+    response_validator(&probe_resp, opts.resource_validator,
+                       sizeof(opts.resource_validator));
     http_close(&probe);
 
     if (multi_supported && opts.connections > 1) {
@@ -352,7 +369,8 @@ static int download_single(options_t* opts, const char* outpath,
     if (file_size > 0 && persist_exists(segpath)) {
         segment_manager_t tmp_mgr;
         memset(&tmp_mgr, 0, sizeof(tmp_mgr));
-        if (persist_load(segpath, &tmp_mgr, file_size, NULL) == 0 && tmp_mgr.segment_count > 0) {
+        if (persist_load(segpath, &tmp_mgr, file_size, NULL,
+                         opts->resource_validator) == 0 && tmp_mgr.segment_count > 0) {
             resume_pos = tmp_mgr.segments[0].downloaded;
             resume_crc32 = tmp_mgr.segments[0].crc32;
             infof(opts, "Resuming at byte %lld (%.1f%%)\n",
@@ -440,6 +458,41 @@ static int download_single(options_t* opts, const char* outpath,
         return 2;
     }
 
+    if (get_resp.status_code != 200 && get_resp.status_code != 206) {
+        fprintf(stderr, "Error: HTTP status %d\n", get_resp.status_code);
+        file_close(&f);
+        http_close(&cli);
+        return 2;
+    }
+    if (resume_pos > 0 &&
+        (get_resp.status_code != 206 ||
+         get_resp.content_range_start != resume_pos ||
+         get_resp.content_range_total != file_size)) {
+        fprintf(stderr, "Error: server did not honor the resume range\n");
+        file_close(&f);
+        http_close(&cli);
+        return 2;
+    }
+    if (get_resp.status_code == 206 && file_size > 0 &&
+        (get_resp.content_range_start != resume_pos ||
+         get_resp.content_range_total != file_size)) {
+        fprintf(stderr, "Error: unexpected Content-Range in single-thread response\n");
+        file_close(&f);
+        http_close(&cli);
+        return 2;
+    }
+    if (opts->resource_validator[0]) {
+        char actual_validator[256];
+        response_validator(&get_resp, actual_validator, sizeof(actual_validator));
+        if (!actual_validator[0] ||
+            strcmp(actual_validator, opts->resource_validator) != 0) {
+            fprintf(stderr, "Error: remote file validator changed during download\n");
+            file_close(&f);
+            http_close(&cli);
+            return 2;
+        }
+    }
+
     char* buf = (char*)malloc(BUF_SIZE);
     if (!buf) { file_close(&f); http_close(&cli); return 1; }
 
@@ -459,7 +512,12 @@ static int download_single(options_t* opts, const char* outpath,
         }
         if (bytes == 0) break;
 
-        file_write(&f, buf, bytes);
+        int written = file_write(&f, buf, bytes);
+        if (written != bytes) {
+            fprintf(stderr, "\nError: %s\n", f.last_error);
+            download_error = true;
+            break;
+        }
         download_crc32 = crc32_update(download_crc32, buf, bytes);
         downloaded += bytes;
         speed_tick(&st, downloaded);
@@ -483,7 +541,8 @@ static int download_single(options_t* opts, const char* outpath,
                     save_mgr.segments[0].state = SEG_DOWNLOADING;
                     save_mgr.segments[0].crc32 = download_crc32;
                     InitializeCriticalSection(&save_mgr.lock);
-                    persist_save(segpath, &save_mgr, file_size, 1);
+                    persist_save(segpath, &save_mgr, file_size, 1,
+                                 opts->resource_validator);
                     DeleteCriticalSection(&save_mgr.lock);
                     free(save_mgr.segments);
                 }
@@ -515,7 +574,8 @@ static int download_single(options_t* opts, const char* outpath,
                 save_mgr.segments[0].state = SEG_DOWNLOADING;
                 save_mgr.segments[0].crc32 = download_crc32;
                 InitializeCriticalSection(&save_mgr.lock);
-                persist_save(segpath, &save_mgr, file_size, 1);
+                persist_save(segpath, &save_mgr, file_size, 1,
+                             opts->resource_validator);
                 DeleteCriticalSection(&save_mgr.lock);
                 free(save_mgr.segments);
             }
@@ -546,7 +606,8 @@ static int download_single(options_t* opts, const char* outpath,
             save_mgr.segments[0].state = SEG_DOWNLOADING;
             save_mgr.segments[0].crc32 = download_crc32;
             InitializeCriticalSection(&save_mgr.lock);
-            persist_save(segpath, &save_mgr, file_size, 1);
+            persist_save(segpath, &save_mgr, file_size, 1,
+                         opts->resource_validator);
             DeleteCriticalSection(&save_mgr.lock);
             free(save_mgr.segments);
         }
@@ -583,7 +644,8 @@ static int download_multi(options_t* opts, const char* outpath,
             infof(opts, "Resume state ignored: output file is smaller than expected\n");
         } else {
             memset(&segmgr, 0, sizeof(segmgr));
-            if (persist_load(segpath, &segmgr, total_size, NULL) == 0) {
+            if (persist_load(segpath, &segmgr, total_size, NULL,
+                             opts->resource_validator) == 0) {
                 infof(opts, "Resuming from segments.bin (%d segments, %lld pending)\n",
                        segmgr.segment_count,
                        (long long)(segmgr.segment_count - segmgr.complete_count));
@@ -602,6 +664,8 @@ static int download_multi(options_t* opts, const char* outpath,
         }
         infof(opts, "Segments: %d\n", segmgr.segment_count);
     }
+
+    segmgr.max_retries = opts->max_retries;
 
     /* Open output file (must exist for resume) */
     file_t output_file;
@@ -624,6 +688,7 @@ static int download_multi(options_t* opts, const char* outpath,
     base_ctx.extra_headers = (const char**)opts->extra_headers;
     base_ctx.extra_count = opts->extra_count;
     base_ctx.timeout_sec = opts->timeout_sec;
+    base_ctx.resource_validator = opts->resource_validator;
     base_ctx.proxy = &opts->proxy;
     base_ctx.segmgr = &segmgr;
     base_ctx.output_file = &output_file;
@@ -638,6 +703,7 @@ static int download_multi(options_t* opts, const char* outpath,
 
     if (!workers || actual_count == 0) {
         fprintf(stderr, "Error: failed to create worker threads\n");
+        thread_pool_cleanup(workers, actual_count);
         file_close(&output_file);
         segmgr_destroy(&segmgr);
         return 1;
@@ -657,7 +723,8 @@ static int download_multi(options_t* opts, const char* outpath,
         /* Periodic save every 5 seconds */
         uint64_t now = GetTickCount64();
         if (now - last_save_ms >= 5000) {
-            persist_save(segpath, &segmgr, total_size, conn);
+            persist_save(segpath, &segmgr, total_size, conn,
+                         opts->resource_validator);
             last_save_ms = now;
         }
 
@@ -678,12 +745,14 @@ static int download_multi(options_t* opts, const char* outpath,
     if (!g_interrupted && segment_failed) {
         fprintf(stderr,
                 "\nError: one or more segments failed. Resume file kept.\n");
-        persist_save(segpath, &segmgr, total_size, conn);
+        persist_save(segpath, &segmgr, total_size, conn,
+                     opts->resource_validator);
     } else if (!g_interrupted && total_size > 0 && final_total != total_size) {
         fprintf(stderr,
                 "\nError: incomplete download (%lld/%lld bytes). Resume file kept.\n",
                 (long long)final_total, (long long)total_size);
-        persist_save(segpath, &segmgr, total_size, conn);
+        persist_save(segpath, &segmgr, total_size, conn,
+                     opts->resource_validator);
     } else if (!g_interrupted) {
         progress_update(&prog, final_total, 0, 0, actual_count);
         progress_done(&prog);
@@ -699,9 +768,16 @@ static int download_multi(options_t* opts, const char* outpath,
     thread_pool_wait(workers, actual_count);
     thread_pool_cleanup(workers, actual_count);
 
+    if (segment_failed) {
+        final_total = segmgr_total_downloaded(&segmgr);
+        persist_save(segpath, &segmgr, total_size, conn,
+                     opts->resource_validator);
+    }
+
     if (g_interrupted) {
         /* Save state for resume on Ctrl+C */
-        persist_save(segpath, &segmgr, total_size, conn);
+        persist_save(segpath, &segmgr, total_size, conn,
+                     opts->resource_validator);
         file_close(&output_file);
         infof(opts, "\nPaused. Run again with same URL/args to resume.\n");
         segmgr_destroy(&segmgr);

@@ -36,6 +36,8 @@ typedef struct {
     int        total_size;      /* sum of all segment byte sizes */
     int        active_count;
     int        complete_count;
+    int        max_retries;
+    bool       fatal_error;
 
     /* Pending queue (ring buffer of indices) */
     int*  pending_queue;
@@ -78,6 +80,7 @@ int64_t segmgr_total_downloaded(segment_manager_t* mgr);
 int64_t segmgr_total_remaining(segment_manager_t* mgr);
 /* Check whether any segment has permanently failed */
 bool segmgr_has_error(segment_manager_t* mgr);
+void segmgr_abort(segment_manager_t* mgr);
 /* Get speeds of all active segments (for dynamic adjustment) */
 int segmgr_get_active_speeds(segment_manager_t* mgr, int64_t* speeds, int max_count);
 

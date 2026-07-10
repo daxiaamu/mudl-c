@@ -7,6 +7,7 @@
 int segmgr_init(segment_manager_t* mgr, int64_t file_size, int max_connections) {
     memset(mgr, 0, sizeof(segment_manager_t));
     mgr->file_size = file_size;
+    mgr->max_retries = 5;
 
     /* Determine segment count and size */
     int seg_count;
@@ -169,9 +170,10 @@ void segmgr_complete(segment_manager_t* mgr, segment_t* seg) {
 void segmgr_error(segment_manager_t* mgr, segment_t* seg) {
     EnterCriticalSection(&mgr->lock);
     seg->retry_count++;
-    if (seg->retry_count < 5) {
-        /* Exponential backoff: 1s, 2s, 4s, 8s, 16s, then give up */
-        uint64_t delay = 1000ULL << seg->retry_count;
+    if (seg->retry_count <= mgr->max_retries) {
+        /* retry_count is the number of retries already scheduled */
+        int shift = seg->retry_count > 5 ? 5 : seg->retry_count;
+        uint64_t delay = 1000ULL << shift;
         if (delay > 30000) delay = 30000;
         seg->state = SEG_SUSPENDED;
         seg->suspend_until_ms = GetTickCount64() + delay;
@@ -184,6 +186,7 @@ void segmgr_error(segment_manager_t* mgr, segment_t* seg) {
         trace("Segment %d error (retries exhausted)", seg->index);
     }
     LeaveCriticalSection(&mgr->lock);
+    WakeAllConditionVariable(&mgr->cv_new_work);
 }
 
 bool segmgr_all_done(segment_manager_t* mgr) {
@@ -324,6 +327,8 @@ int64_t segmgr_total_remaining(segment_manager_t* mgr) {
 bool segmgr_has_error(segment_manager_t* mgr) {
     bool has_error = false;
     EnterCriticalSection(&mgr->lock);
+    if (mgr->fatal_error)
+        has_error = true;
     for (int i = 0; i < mgr->segment_count; i++) {
         if (mgr->segments[i].state == SEG_ERROR) {
             has_error = true;
@@ -332,4 +337,11 @@ bool segmgr_has_error(segment_manager_t* mgr) {
     }
     LeaveCriticalSection(&mgr->lock);
     return has_error;
+}
+
+void segmgr_abort(segment_manager_t* mgr) {
+    EnterCriticalSection(&mgr->lock);
+    mgr->fatal_error = true;
+    LeaveCriticalSection(&mgr->lock);
+    WakeAllConditionVariable(&mgr->cv_new_work);
 }

@@ -7,7 +7,7 @@
 | Feature | Description |
 |---------|-------------|
 | Multi-thread downloads | Parallel HTTP range downloads, up to 32 connections |
-| Strict resume | Resume state includes segment layout and CRC32 validation |
+| Strict resume | Validates segment CRC32 plus the remote ETag/Last-Modified identity |
 | Signed URLs | Handles long redirect URLs used by cloud/CDN signed links |
 | Native HTTPS | Uses Windows SChannel, no bundled OpenSSL |
 | UTF-8 paths | Supports non-ASCII output filenames through Windows wide APIs |
@@ -34,7 +34,7 @@ mudl -c 8 "https://example.com/file.zip"
 mudl -c 8 "https://cdn.example.com/file.zip?token=abc"
 ```
 
-Resume works when the new URL points to the same file size. Existing data is verified against the saved segment CRC32 before download continues.
+Resume works when the new URL returns the same file size and remote validator (`ETag`, or `Last-Modified` when no ETag is available). Existing bytes are also verified against each saved segment CRC32. If the server provides no stable validator, MUDL restarts instead of trusting a size-only match.
 
 ## HTTPS Notes
 
@@ -50,6 +50,8 @@ Requires MinGW-w64, either cross-compiled from Linux/WSL or built from MSYS2/Min
 git clone https://github.com/daxiaamu/mudl-c.git
 cd mudl-c
 make
+# Optional local HTTP integration tests (requires Python 3):
+make test
 ```
 
 Manual build:

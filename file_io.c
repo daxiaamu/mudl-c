@@ -119,8 +119,9 @@ int file_open(file_t* f, const char* path, int64_t expected_size) {
         return -1;
     }
 
+    DWORD disposition = expected_size > 0 ? OPEN_ALWAYS : CREATE_ALWAYS;
     f->hFile = CreateFileW(wpath, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-                           OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+                           disposition, FILE_ATTRIBUTE_NORMAL, NULL);
     if (f->hFile == INVALID_HANDLE_VALUE) {
         snprintf(f->last_error, sizeof(f->last_error),
                  "Cannot create file: %s (error %lu)", path, GetLastError());
@@ -131,10 +132,22 @@ int file_open(file_t* f, const char* path, int64_t expected_size) {
     if (expected_size > 0) {
         LARGE_INTEGER li;
         li.QuadPart = expected_size;
-        SetFilePointerEx(f->hFile, li, NULL, FILE_BEGIN);
-        SetEndOfFile(f->hFile);
+        if (!SetFilePointerEx(f->hFile, li, NULL, FILE_BEGIN) ||
+            !SetEndOfFile(f->hFile)) {
+            snprintf(f->last_error, sizeof(f->last_error),
+                     "Cannot allocate output file: %s (error %lu)", path, GetLastError());
+            CloseHandle(f->hFile);
+            f->hFile = INVALID_HANDLE_VALUE;
+            return -1;
+        }
         li.QuadPart = 0;
-        SetFilePointerEx(f->hFile, li, NULL, FILE_BEGIN);
+        if (!SetFilePointerEx(f->hFile, li, NULL, FILE_BEGIN)) {
+            snprintf(f->last_error, sizeof(f->last_error),
+                     "Cannot seek output file: %s (error %lu)", path, GetLastError());
+            CloseHandle(f->hFile);
+            f->hFile = INVALID_HANDLE_VALUE;
+            return -1;
+        }
     }
 
     f->size = expected_size;

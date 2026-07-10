@@ -7,5 +7,7 @@
 *.segments.bak
 test_*
 !test_source.bin
+!tests/
+!tests/test_integration.py
 .DS_Store
 Thumbs.db

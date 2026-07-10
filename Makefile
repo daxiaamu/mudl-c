@@ -14,7 +14,7 @@ RM = rm -f
 RM_TARGETS = $(OBJS) $(TARGET)
 endif
 
-.PHONY: all clean
+.PHONY: all clean test
 
 all: $(TARGET)
 
@@ -27,3 +27,6 @@ $(TARGET): $(OBJS)
 
 clean:
 	-$(RM) $(RM_TARGETS)
+
+test: $(TARGET)
+	python tests/test_integration.py

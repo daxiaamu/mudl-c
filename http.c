@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 
 
 /* ===== SChannel SSL support ===== */
@@ -52,6 +53,24 @@ static void ssl_close(ssl_t* ssl);
 static int http_recv_line(http_client_t* cli, char* buf, int buf_n);
 
 static bool winsock_inited = false;
+
+static int socket_send_all(SOCKET fd, const char* data, int len) {
+    int sent = 0;
+    while (sent < len) {
+        int n = send(fd, data + sent, len - sent, 0);
+        if (n <= 0) return -1;
+        sent += n;
+    }
+    return sent;
+}
+
+static bool str_contains_i(const char* text, const char* needle) {
+    size_t needle_len = strlen(needle);
+    if (needle_len == 0) return true;
+    for (; *text; text++)
+        if (_strnicmp(text, needle, needle_len) == 0) return true;
+    return false;
+}
 
 static void trim_copy(const char* src, size_t len, char* out, int out_n) {
     while (len > 0 && (*src == ' ' || *src == '\t')) {
@@ -294,7 +313,8 @@ static int ssl_connect(http_client_t* cli, ssl_t* ssl) {
     }
 
     /* Send initial handshake data */
-    int r = send(cli->fd, (char*)outBuffers[0].pvBuffer, outBuffers[0].cbBuffer, 0);
+    int r = socket_send_all(cli->fd, (char*)outBuffers[0].pvBuffer,
+                            (int)outBuffers[0].cbBuffer);
     FreeContextBuffer(outBuffers[0].pvBuffer);
     if (r <= 0) { trace("SSL handshake send failed"); return -1; }
 
@@ -338,7 +358,11 @@ static int ssl_connect(http_client_t* cli, ssl_t* ssl) {
         if (s == SEC_E_OK) {
             /* Handshake complete - send final token if any */
             if (outBuffers[0].cbBuffer > 0 && outBuffers[0].pvBuffer) {
-                send(cli->fd, (char*)outBuffers[0].pvBuffer, outBuffers[0].cbBuffer, 0);
+                if (socket_send_all(cli->fd, (char*)outBuffers[0].pvBuffer,
+                                    (int)outBuffers[0].cbBuffer) < 0) {
+                    FreeContextBuffer(outBuffers[0].pvBuffer);
+                    return -1;
+                }
                 FreeContextBuffer(outBuffers[0].pvBuffer);
             }
             trace("SSL handshake complete, buf_pos=%d buf_len=%d", buf_pos, buf_len);
@@ -368,7 +392,11 @@ static int ssl_connect(http_client_t* cli, ssl_t* ssl) {
             }
             buf_pos += consumed;
             if (outBuffers[0].cbBuffer > 0 && outBuffers[0].pvBuffer) {
-                send(cli->fd, (char*)outBuffers[0].pvBuffer, outBuffers[0].cbBuffer, 0);
+                if (socket_send_all(cli->fd, (char*)outBuffers[0].pvBuffer,
+                                    (int)outBuffers[0].cbBuffer) < 0) {
+                    FreeContextBuffer(outBuffers[0].pvBuffer);
+                    return -1;
+                }
                 FreeContextBuffer(outBuffers[0].pvBuffer);
             }
             continue;
@@ -428,7 +456,7 @@ static int ssl_send(http_client_t* cli, ssl_t* ssl, const char* data, int len) {
     }
 
     int total = buffers[0].cbBuffer + buffers[1].cbBuffer + buffers[2].cbBuffer;
-    int sent = send(cli->fd, msg, total, 0);
+    int sent = socket_send_all(cli->fd, msg, total);
     free(msg);
 
     if (sent <= 0) return -1;
@@ -814,6 +842,9 @@ int http_request(http_client_t* cli, http_method_t method,
                  const char* referer, const char** extra_headers,
                  int extra_count, http_response_t* resp) {
     memset(resp, 0, sizeof(http_response_t));
+    cli->body_chunked = false;
+    cli->chunk_done = false;
+    cli->chunk_remaining = 0;
 
     char req[32768];
     int pos = 0;
@@ -936,19 +967,28 @@ int http_request(http_client_t* cli, http_method_t method,
             snprintf(resp->location, sizeof(resp->location), "%s", loc);
         }
         else if (_strnicmp(line, "Transfer-Encoding:", 18) == 0) {
-            if (strstr(line + 18, "chunked"))
+            if (str_contains_i(line + 18, "chunked"))
                 resp->is_chunked = true;
         }
         else if (_strnicmp(line, "Content-Type:", 13) == 0) {
             const char* ct = str_trim(line + 13);
             strncpy(resp->content_type, ct, sizeof(resp->content_type) - 1);
         }
+        else if (_strnicmp(line, "ETag:", 5) == 0) {
+            const char* value = str_trim(line + 5);
+            snprintf(resp->etag, sizeof(resp->etag), "%s", value);
+        }
+        else if (_strnicmp(line, "Last-Modified:", 14) == 0) {
+            const char* value = str_trim(line + 14);
+            snprintf(resp->last_modified, sizeof(resp->last_modified), "%s", value);
+        }
     }
     resp->headers[hdr_pos] = 0;
+    cli->body_chunked = resp->is_chunked;
     return 0;
 }
 
-int http_read_body(http_client_t* cli, char* buf, int buf_size) {
+static int http_read_transport(http_client_t* cli, char* buf, int buf_size) {
     int r;
     if (cli->ssl_ctx) {
         r = ssl_recv(cli, (ssl_t*)cli->ssl_ctx, buf, buf_size);
@@ -961,13 +1001,17 @@ int http_read_body(http_client_t* cli, char* buf, int buf_size) {
     r = recv(cli->fd, buf, buf_size, 0);
     if (r < 0) {
         int err = WSAGetLastError();
-        if (err == WSAEWOULDBLOCK || err == WSAETIMEDOUT)
-            return 0;
         _snprintf(cli->last_error, sizeof(cli->last_error),
                   "Recv error: %d", err);
         return -1;
     }
     return r;
+}
+
+int http_read_body(http_client_t* cli, char* buf, int buf_size) {
+    if (cli->body_chunked)
+        return http_read_body_chunked(cli, buf, buf_size, &cli->chunk_done);
+    return http_read_transport(cli, buf, buf_size);
 }
 
 
@@ -977,12 +1021,7 @@ int http_read_body(http_client_t* cli, char* buf, int buf_size) {
 /* Read chunk header: returns chunk size, or 0 for last chunk, -1 on error */
 static int http_recv_byte(http_client_t* cli) {
     char b;
-    int r;
-    if (cli->ssl_ctx) {
-        r = ssl_recv(cli, (ssl_t*)cli->ssl_ctx, &b, 1);
-    } else {
-        r = recv(cli->fd, &b, 1, 0);
-    }
+    int r = http_read_transport(cli, &b, 1);
     if (r <= 0) return -1;
     return (unsigned char)b;
 }
@@ -1001,7 +1040,9 @@ int http_read_chunk_size(http_client_t* cli) {
             /* Parse hex size (skip extensions after ;) */
             char* ext = strchr(line, ';');
             if (ext) *ext = 0;
-            long size = strtol(line, NULL, 16);
+            char* end = NULL;
+            unsigned long size = strtoul(line, &end, 16);
+            if (end == line || *end != 0 || size > INT_MAX) return -1;
             return (int)size;
         }
         pos++;
@@ -1014,20 +1055,9 @@ int http_read_chunk_size(http_client_t* cli) {
 int http_read_chunk_trailer(http_client_t* cli) {
     char line[256];
     while (1) {
-        int pos = 0;
-        while (pos < (int)sizeof(line) - 1) {
-            int r = recv(cli->fd, line + pos, 1, 0);
-            if (r <= 0) return -1;
-            if (line[pos] == '\n') {
-                line[pos] = 0;
-                if (pos > 0 && line[pos-1] == '\r') line[pos-1] = 0;
-                if (line[0] == 0) return 0;  /* empty line = end of trailers */
-                break;
-            }
-            pos++;
-        }
+        if (http_recv_line(cli, line, sizeof(line)) < 0) return -1;
+        if (line[0] == 0) return 0;
     }
-    return 0;
 }
 
 /* Read body with chunked transfer-encoding support.
@@ -1036,29 +1066,35 @@ int http_read_body_chunked(http_client_t* cli, char* buf, int buf_size,
                            bool* last_chunk) {
     if (*last_chunk) return 0;
 
-    int chunk_size = http_read_chunk_size(cli);
-    if (chunk_size < 0) return -1;
-    if (chunk_size == 0) {
-        /* Last chunk: read trailers */
-        http_read_chunk_trailer(cli);
-        *last_chunk = true;
-        return 0;
+    if (cli->chunk_remaining == 0) {
+        int chunk_size = http_read_chunk_size(cli);
+        if (chunk_size < 0) return -1;
+        if (chunk_size == 0) {
+            if (http_read_chunk_trailer(cli) != 0) return -1;
+            *last_chunk = true;
+            return 0;
+        }
+        cli->chunk_remaining = chunk_size;
     }
 
-    /* Read chunk data */
-    int to_read = chunk_size;
-    if (to_read > buf_size) to_read = buf_size;
-    int pos = 0;
-    while (pos < to_read) {
-        int r = recv(cli->fd, buf + pos, to_read - pos, 0);
-        if (r <= 0) return -1;
-        pos += r;
+    int to_read = cli->chunk_remaining < buf_size
+                ? (int)cli->chunk_remaining : buf_size;
+    int got = http_read_transport(cli, buf, to_read);
+    if (got <= 0) {
+        if (got == 0)
+            _snprintf(cli->last_error, sizeof(cli->last_error),
+                      "Unexpected EOF in chunked response");
+        return -1;
+    }
+    cli->chunk_remaining -= got;
+
+    if (cli->chunk_remaining == 0) {
+        int cr = http_recv_byte(cli);
+        int lf = http_recv_byte(cli);
+        if (cr != '\r' || lf != '\n') return -1;
     }
 
-    /* Read trailing CRLF after chunk data */
-    if (http_recv_byte(cli) < 0 || http_recv_byte(cli) < 0) return -1;
-
-    return pos;
+    return got;
 }
 void http_close(http_client_t* cli) {
     if (cli->ssl_ctx) {

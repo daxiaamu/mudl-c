@@ -7,27 +7,32 @@
 #define WORK_BUF_SIZE 65536
 
 HANDLE* thread_pool_start(int count, worker_ctx_t* base_ctx, int* out_count) {
-    *out_count = count;
+    *out_count = 0;
     HANDLE* threads = (HANDLE*)calloc(count, sizeof(HANDLE));
-    if (!threads) { *out_count = 0; return NULL; }
+    if (!threads) return NULL;
 
+    int created = 0;
     for (int i = 0; i < count; i++) {
         worker_ctx_t* ctx = (worker_ctx_t*)malloc(sizeof(worker_ctx_t));
         if (!ctx) continue;
         memcpy(ctx, base_ctx, sizeof(worker_ctx_t));
-        ctx->thread_id = i;
+        ctx->thread_id = created;
 
-        threads[i] = CreateThread(NULL, 0, worker_thread_func, ctx, 0, NULL);
-        if (!threads[i]) {
+        HANDLE thread = CreateThread(NULL, 0, worker_thread_func, ctx, 0, NULL);
+        if (!thread) {
             warn("Failed to create worker thread %d", i);
             free(ctx);
+        } else {
+            threads[created++] = thread;
         }
     }
+    *out_count = created;
     return threads;
 }
 
 void thread_pool_wait(HANDLE* threads, int count) {
-    WaitForMultipleObjects(count, threads, TRUE, INFINITE);
+    if (threads && count > 0)
+        WaitForMultipleObjects(count, threads, TRUE, INFINITE);
 }
 
 void thread_pool_cleanup(HANDLE* threads, int count) {
@@ -40,25 +45,25 @@ void thread_pool_cleanup(HANDLE* threads, int count) {
 DWORD WINAPI worker_thread_func(LPVOID param) {
     worker_ctx_t* ctx = (worker_ctx_t*)param;
     int tid = ctx->thread_id;
+    segment_manager_t* mgr = ctx->segmgr;
 
     /* Allocate receive buffer */
     char* buf = (char*)malloc(WORK_BUF_SIZE);
     if (!buf) {
         warn("Worker %d: out of memory", tid);
+        segmgr_abort(mgr);
         free(ctx);
         return 1;
     }
 
-    segment_manager_t* mgr = ctx->segmgr;
-
-    while (!*ctx->interrupted) {
+    while (!*ctx->interrupted && !segmgr_has_error(mgr)) {
         /* 1. Acquire a pending segment */
         segment_t* seg = segmgr_acquire_pending(mgr);
         if (!seg && segmgr_all_done(mgr)) break;
 
         if (!seg) {
             /* Nothing to do - wait for new work or completion */
-            if (segmgr_all_done(mgr)) break;
+            if (segmgr_all_done(mgr) || segmgr_has_error(mgr)) break;
 
             EnterCriticalSection(&mgr->lock);
             if (mgr->pending_head > mgr->pending_tail && mgr->active_count == 0 && !segmgr_all_done(mgr)) {
@@ -132,7 +137,7 @@ DWORD WINAPI worker_thread_func(LPVOID param) {
         int64_t request_start = seg->start_offset + seg->downloaded;
         if (resp.content_range_start != request_start ||
             resp.content_range_end != seg->end_offset ||
-            resp.content_range_total <= 0) {
+            resp.content_range_total != mgr->file_size) {
             warn("Worker %d: unexpected Content-Range %lld-%lld/%lld for request %lld-%lld",
                  tid,
                  (long long)resp.content_range_start,
@@ -145,15 +150,28 @@ DWORD WINAPI worker_thread_func(LPVOID param) {
             continue;
         }
 
+        if (ctx->resource_validator && ctx->resource_validator[0]) {
+            char actual[256] = {0};
+            if (resp.etag[0])
+                snprintf(actual, sizeof(actual), "etag:%s", resp.etag);
+            else if (resp.last_modified[0])
+                snprintf(actual, sizeof(actual), "last-modified:%s", resp.last_modified);
+            if (!actual[0] || strcmp(actual, ctx->resource_validator) != 0) {
+                warn("Worker %d: remote file validator changed", tid);
+                segmgr_error(mgr, seg);
+                http_close(&http);
+                continue;
+            }
+        }
+
         seg->socket_fd = (int)http.fd;
 
         /* 3. Receive data loop */
         uint64_t last_speed_ms = GetTickCount64();
         int64_t chunk_bytes = 0;
-        bool last_chunk = false;
         bool transfer_error = false;
 
-        while (!*ctx->interrupted) {
+        while (!*ctx->interrupted && !segmgr_has_error(mgr)) {
             int64_t remaining = seg_len - seg->downloaded;
             if (remaining <= 0) {
                 break;
@@ -161,11 +179,7 @@ DWORD WINAPI worker_thread_func(LPVOID param) {
 
             int bytes;
             int read_size = remaining < WORK_BUF_SIZE ? (int)remaining : WORK_BUF_SIZE;
-            if (resp.is_chunked) {
-                bytes = http_read_body_chunked(&http, buf, read_size, &last_chunk);
-            } else {
-                bytes = http_read_body(&http, buf, read_size);
-            }
+            bytes = http_read_body(&http, buf, read_size);
             if (bytes < 0) {
                 /* Error */
                 segmgr_error(mgr, seg);
@@ -191,8 +205,11 @@ DWORD WINAPI worker_thread_func(LPVOID param) {
                 break;
             }
 
-            seg->crc32 = crc32_update(seg->crc32, buf, bytes);
+            uint32_t next_crc = crc32_update(seg->crc32, buf, bytes);
+            EnterCriticalSection(&mgr->lock);
+            seg->crc32 = next_crc;
             seg->downloaded += bytes;
+            LeaveCriticalSection(&mgr->lock);
             InterlockedExchangeAdd64(ctx->global_downloaded, bytes);
             chunk_bytes += bytes;
 
