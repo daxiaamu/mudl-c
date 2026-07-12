@@ -11,6 +11,7 @@ test_*
 !test_source.bin
 !tests/
 !tests/test_integration.py
+!tests/test_https.py
 !tests/test_segment.c
 !tests/test_options.c
 !tests/test_url.c
