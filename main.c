@@ -17,36 +17,13 @@
 #include "thread_pool.h"
 #include "persist.h"
 #include "checksum.h"
+#include "options.h"
 
-#define VERSION "0.5.9"
-#define DEFAULT_CONNECTIONS 8
-#define DEFAULT_TIMEOUT 30
-#define DEFAULT_RETRY 5
 #define BUF_SIZE 65536
 
 #ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
 #define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
 #endif
-
-typedef struct {
-    char        url[HTTP_MAX_URL];
-    char        output[MAX_PATH * 2];
-    char        dir[MAX_PATH * 2];
-    int         connections;
-    int         timeout_sec;
-    int         max_retries;
-    bool        quiet;
-    progress_mode_t progress_mode;
-    char        user_agent[256];
-    char        referer[1024];
-    char*       extra_headers[32];
-    int         extra_count;
-    proxy_config_t proxy;
-    char        checksum[256];
-    char        resource_validator[256];
-    bool        help;
-    bool        version;
-} options_t;
 
 static volatile bool g_interrupted = false;
 
@@ -1121,7 +1098,7 @@ static void print_help(void) {
     printf("  mudl -q -p json https://example.com/file.bin\n");
 }
 static void print_version(void) {
-    printf("MUDL v%s\n", VERSION);
+    printf("MUDL v%s\n", MUDL_VERSION);
     printf("Multi-threaded Universal Downloader (MUDL)\n");
 }
 

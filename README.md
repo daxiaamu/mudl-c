@@ -144,6 +144,7 @@ HTTPS downloads through an HTTP proxy use `CONNECT` tunneling. TLS is still hand
 
 ```text
 main.c            Entry point, argument parsing, engine orchestration
+options.h         Command-line option model and defaults
 http.c / .h       HTTP/HTTPS client using SChannel
 file_io.c / .h    Thread-safe file I/O and UTF-8 path handling
 segment.c / .h    Segment manager
