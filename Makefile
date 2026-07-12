@@ -14,7 +14,7 @@ RM = rm -f
 RM_TARGETS = $(OBJS) $(TARGET)
 endif
 
-.PHONY: all clean test
+.PHONY: all clean test unit-test integration-test
 
 all: $(TARGET)
 
@@ -28,5 +28,11 @@ $(TARGET): $(OBJS)
 clean:
 	-$(RM) $(RM_TARGETS)
 
-test: $(TARGET)
+unit-test:
+	$(CC) $(CFLAGS) -I. -o tests/test_segment.exe tests/test_segment.c segment.c utils.c -lws2_32
+	./tests/test_segment.exe
+
+integration-test: $(TARGET)
 	python tests/test_integration.py
+
+test: unit-test integration-test

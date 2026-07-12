@@ -39,6 +39,8 @@ typedef struct {
     int      recv_pos;
     char     extra_buf[65536];
     int      extra_len;
+    SECURITY_STATUS last_status;
+    int      last_wsa_error;
 } ssl_t;
 
 /* Global SChannel credential (acquired once) */
@@ -53,6 +55,38 @@ static void ssl_close(ssl_t* ssl);
 static int http_recv_line(http_client_t* cli, char* buf, int buf_n);
 
 static bool winsock_inited = false;
+
+static const char* winsock_error_name(int code) {
+    switch (code) {
+        case WSAETIMEDOUT: return "connection timed out";
+        case WSAECONNRESET: return "connection reset by peer";
+        case WSAECONNREFUSED: return "connection refused";
+        case WSAEHOSTUNREACH: return "host unreachable";
+        case WSAENETUNREACH: return "network unreachable";
+        case WSAEHOSTDOWN: return "host is down";
+        case WSAENETRESET: return "network connection reset";
+        case WSAECONNABORTED: return "connection aborted";
+        default: return "socket error";
+    }
+}
+
+static const char* schannel_error_name(SECURITY_STATUS status) {
+    switch (status) {
+        case SEC_E_UNTRUSTED_ROOT: return "certificate chain is not trusted";
+        case SEC_E_CERT_EXPIRED: return "certificate is expired or not yet valid";
+        case SEC_E_WRONG_PRINCIPAL: return "certificate hostname mismatch";
+        case SEC_E_ILLEGAL_MESSAGE: return "peer rejected the TLS protocol or handshake";
+        case SEC_E_ALGORITHM_MISMATCH: return "no compatible TLS algorithm or protocol";
+        case SEC_E_CERT_UNKNOWN: return "certificate validation failed";
+        case SEC_E_INCOMPLETE_MESSAGE: return "incomplete TLS record";
+        default: return "SChannel handshake error";
+    }
+}
+
+static void set_socket_error(char* out, int out_n, const char* operation, int code) {
+    _snprintf(out, out_n, "%s: %s (WinSock %d)",
+              operation, winsock_error_name(code), code);
+}
 
 static int socket_send_all(SOCKET fd, const char* data, int len) {
     int sent = 0;
@@ -176,7 +210,7 @@ static int connect_with_timeout(SOCKET fd, const struct sockaddr* addr,
 
     int wsa = WSAGetLastError();
     if (wsa != WSAEWOULDBLOCK && wsa != WSAEINPROGRESS && wsa != WSAEINVAL) {
-        _snprintf(err, err_n, "connect failed: %d", wsa);
+        set_socket_error(err, err_n, "connect failed", wsa);
         nonblock = 0;
         ioctlsocket(fd, FIONBIO, &nonblock);
         return -1;
@@ -191,8 +225,10 @@ static int connect_with_timeout(SOCKET fd, const struct sockaddr* addr,
 
     r = select(0, NULL, &wfds, NULL, &tv);
     if (r <= 0) {
-        _snprintf(err, err_n, r == 0 ? "connect timed out" : "connect select failed: %d",
-                  WSAGetLastError());
+        if (r == 0)
+            set_socket_error(err, err_n, "connect failed", WSAETIMEDOUT);
+        else
+            set_socket_error(err, err_n, "connect select failed", WSAGetLastError());
         nonblock = 0;
         ioctlsocket(fd, FIONBIO, &nonblock);
         return -1;
@@ -202,7 +238,7 @@ static int connect_with_timeout(SOCKET fd, const struct sockaddr* addr,
     int len = sizeof(so_error);
     getsockopt(fd, SOL_SOCKET, SO_ERROR, (char*)&so_error, &len);
     if (so_error != 0) {
-        _snprintf(err, err_n, "connect failed: %d", so_error);
+        set_socket_error(err, err_n, "connect failed", so_error);
         nonblock = 0;
         ioctlsocket(fd, FIONBIO, &nonblock);
         return -1;
@@ -308,6 +344,7 @@ static int ssl_connect(http_client_t* cli, ssl_t* ssl) {
 
     trace("SSL init result: 0x%08x, token len=%lu", s, outBuffers[0].cbBuffer);
     if (s != SEC_I_CONTINUE_NEEDED) {
+        ssl->last_status = s;
         trace("InitializeSecurityContext failed: 0x%08x", s);
         return -1;
     }
@@ -316,7 +353,11 @@ static int ssl_connect(http_client_t* cli, ssl_t* ssl) {
     int r = socket_send_all(cli->fd, (char*)outBuffers[0].pvBuffer,
                             (int)outBuffers[0].cbBuffer);
     FreeContextBuffer(outBuffers[0].pvBuffer);
-    if (r <= 0) { trace("SSL handshake send failed"); return -1; }
+    if (r <= 0) {
+        ssl->last_wsa_error = WSAGetLastError();
+        trace("SSL handshake send failed");
+        return -1;
+    }
 
     /* Handshake loop */
     int max_rounds = 20;
@@ -328,7 +369,11 @@ static int ssl_connect(http_client_t* cli, ssl_t* ssl) {
         int bytes;
         if (buf_pos >= buf_len) {
             bytes = recv(cli->fd, buf, sizeof(buf), 0);
-            if (bytes <= 0) { trace("SSL handshake recv failed: %d", bytes); return -1; }
+            if (bytes <= 0) {
+                ssl->last_wsa_error = bytes == 0 ? WSAECONNRESET : WSAGetLastError();
+                trace("SSL handshake recv failed: %d", bytes);
+                return -1;
+            }
             buf_pos = 0;
             buf_len = bytes;
         } else {
@@ -409,11 +454,13 @@ static int ssl_connect(http_client_t* cli, ssl_t* ssl) {
             continue;
         }
         else {
+            ssl->last_status = s;
             trace("SSL handshake failed: 0x%08x", s);
             return -1;
         }
     }
 
+    ssl->last_wsa_error = WSAETIMEDOUT;
     trace("SSL handshake timed out");
     return -1;
 }
@@ -520,6 +567,9 @@ static int ssl_recv(http_client_t* cli, ssl_t* ssl, char* buf, int buf_size) {
         while (s == SEC_E_INCOMPLETE_MESSAGE && retries-- > 0) {
             int more = recv(cli->fd, enc_buf + bytes, (int)sizeof(enc_buf) - bytes, 0);
             if (more <= 0) {
+                int code = more == 0 ? WSAECONNRESET : WSAGetLastError();
+                set_socket_error(cli->last_error, sizeof(cli->last_error),
+                                 "TLS receive failed", code);
                 trace("ssl_recv: incomplete, recv failed: %d", more);
                 return -1;
             }
@@ -537,10 +587,16 @@ static int ssl_recv(http_client_t* cli, ssl_t* ssl, char* buf, int buf_size) {
             s = DecryptMessage(&ssl->hCtx, &desc, 0, NULL);
                     }
         if (s == SEC_E_INCOMPLETE_MESSAGE) {
+            _snprintf(cli->last_error, sizeof(cli->last_error),
+                      "TLS receive failed: incomplete record (SChannel 0x%08lx)",
+                      (unsigned long)s);
             trace("ssl_recv: too many retries for incomplete message");
             return -1;
         }
         if (s != SEC_E_OK) {
+            _snprintf(cli->last_error, sizeof(cli->last_error),
+                      "TLS receive failed: %s (SChannel 0x%08lx)",
+                      schannel_error_name(s), (unsigned long)s);
             trace("DecryptMessage failed: 0x%08x", s);
             return -1;
         }
@@ -781,11 +837,24 @@ int http_connect(http_client_t* cli, const char* url, int timeout_sec,
             return -1;
         }
         if (ssl_connect(cli, ssl) != 0) {
-            _snprintf(cli->last_error, sizeof(cli->last_error),
-                      "TLS handshake failed with %s:%d using Windows SChannel. "
-                      "Check system TLS/certificate settings, network interception, "
-                      "or try another HTTPS backend.",
-                      host, port);
+            if (ssl->last_status != SEC_E_OK) {
+                _snprintf(cli->last_error, sizeof(cli->last_error),
+                          "TLS handshake failed with %s:%d: %s "
+                          "(SChannel 0x%08lx). Check the Windows certificate store "
+                          "and enabled TLS protocols.", host, port,
+                          schannel_error_name(ssl->last_status),
+                          (unsigned long)ssl->last_status);
+            } else if (ssl->last_wsa_error) {
+                _snprintf(cli->last_error, sizeof(cli->last_error),
+                          "TLS handshake transport failed with %s:%d: %s "
+                          "(WinSock %d)", host, port,
+                          winsock_error_name(ssl->last_wsa_error),
+                          ssl->last_wsa_error);
+            } else {
+                _snprintf(cli->last_error, sizeof(cli->last_error),
+                          "TLS handshake failed with %s:%d using Windows SChannel",
+                          host, port);
+            }
             free(ssl);
             closesocket(cli->fd);
             cli->fd = INVALID_SOCKET;
@@ -916,8 +985,15 @@ int http_request(http_client_t* cli, http_method_t method,
 
     char line[HTTP_MAX_HEADER_LINE];
     if (http_recv_line(cli, line, sizeof(line)) < 0) {
-        _snprintf(cli->last_error, sizeof(cli->last_error),
-                  "No response from server");
+        if (!cli->last_error[0]) {
+            int code = WSAGetLastError();
+            if (code)
+                set_socket_error(cli->last_error, sizeof(cli->last_error),
+                                 "No HTTP response", code);
+            else
+                _snprintf(cli->last_error, sizeof(cli->last_error),
+                          "No HTTP response: server closed the connection before headers");
+        }
         return -1;
     }
 
@@ -995,7 +1071,9 @@ static int http_read_transport(http_client_t* cli, char* buf, int buf_size) {
     if (cli->ssl_ctx) {
         r = ssl_recv(cli, (ssl_t*)cli->ssl_ctx, buf, buf_size);
         if (r < 0) {
-            _snprintf(cli->last_error, sizeof(cli->last_error), "SSL recv error");
+            if (!cli->last_error[0])
+                _snprintf(cli->last_error, sizeof(cli->last_error),
+                          "TLS receive failed: unknown SChannel error");
             return -1;
         }
         return r;
@@ -1003,8 +1081,8 @@ static int http_read_transport(http_client_t* cli, char* buf, int buf_size) {
     r = recv(cli->fd, buf, buf_size, 0);
     if (r < 0) {
         int err = WSAGetLastError();
-        _snprintf(cli->last_error, sizeof(cli->last_error),
-                  "Recv error: %d", err);
+        set_socket_error(cli->last_error, sizeof(cli->last_error),
+                         "Receive failed", err);
         return -1;
     }
     return r;

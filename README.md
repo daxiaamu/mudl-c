@@ -1,5 +1,9 @@
 # MUDL-C
 
+[![CI](https://github.com/daxiaamu/mudl-c/actions/workflows/ci.yml/badge.svg)](https://github.com/daxiaamu/mudl-c/actions/workflows/ci.yml)
+
+See [CHANGELOG.md](CHANGELOG.md) for release history.
+
 > **Nano CLI download manager for Windows** - a small, dependency-free C downloader built on Win32 and SChannel.
 
 ## Features
@@ -50,7 +54,7 @@ Requires MinGW-w64, either cross-compiled from Linux/WSL or built from MSYS2/Min
 git clone https://github.com/daxiaamu/mudl-c.git
 cd mudl-c
 make
-# Optional local HTTP integration tests (requires Python 3):
+# Optional C unit tests and local HTTP integration tests (requires Python 3):
 make test
 ```
 
@@ -144,8 +148,9 @@ progress.c / .h   Progress bar, line, and JSON output
 persist.c / .h    Resume state and CRC32 validation
 checksum.c / .h   Download checksum verification
 utils.c / .h      Formatting, tracing, and checksum helpers
+tests/             C unit tests and HTTP integration tests
 ```
 
 ## License
 
-MIT
+[MIT](LICENSE)
