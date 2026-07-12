@@ -2,7 +2,7 @@
 
 All notable changes to MUDL-C are documented in this file.
 
-## [Unreleased]
+## [0.5.10] - 2026-07-12
 
 ### Added
 
@@ -10,6 +10,8 @@ All notable changes to MUDL-C are documented in this file.
 - A tested `mudl.exe` Actions artifact after successful CI runs.
 - A dedicated command-line option module and direct parser unit tests.
 - A dedicated download engine module, leaving `main.c` focused on process setup.
+- Engine integration coverage for redirect loops, empty responses, malformed
+  status lines, checksum failures, and invalid absolute `--output` paths.
 
 ## [0.5.9] - 2026-07-12
 
@@ -44,5 +46,6 @@ All notable changes to MUDL-C are documented in this file.
 - Resume speed reporting and final summaries to follow aria2-style semantics.
 - Early EOF, disk short-write, and malformed partial-response handling.
 
+[0.5.10]: https://github.com/daxiaamu/mudl-c/compare/v0.5.9...v0.5.10
 [0.5.9]: https://github.com/daxiaamu/mudl-c/compare/v0.5.8...v0.5.9
 [0.5.8]: https://github.com/daxiaamu/mudl-c/compare/v0.5.7...v0.5.8

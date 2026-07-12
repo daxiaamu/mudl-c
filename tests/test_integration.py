@@ -59,6 +59,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
         elif self.path == "/expand":
             self._range('"expand"', data=EXPAND_DATA)
+        elif self.path == "/redirect-loop":
+            self.send_response(302)
+            self.send_header(
+                "Location",
+                f"http://127.0.0.1:{self.server.server_address[1]}/redirect-loop")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        elif self.path == "/no-response":
+            self.close_connection = True
+        elif self.path == "/malformed":
+            self.connection.sendall(b"NOT-HTTP\r\n\r\n")
+            self.close_connection = True
         elif self.path == "/chunked":
             self.send_response(200)
             self.send_header("Transfer-Encoding", "chunked")
@@ -213,6 +225,36 @@ def main():
 
             result = run(mudl, temp, base + "/missing", "missing.bin")
             assert result.returncode != 0, "HTTP 404 was accepted"
+
+            result = run(mudl, temp, base + "/redirect-loop", "redirect.bin",
+                         "--retries", "0")
+            assert result.returncode != 0, "redirect loop was accepted"
+            assert Handler.counts.get("/redirect-loop", 0) == 6
+
+            result = run(mudl, temp, base + "/no-response", "no-response.bin",
+                         "--retries", "0")
+            stderr = result.stderr.decode(errors="replace")
+            assert result.returncode != 0, "empty response was accepted"
+            assert "No HTTP response" in stderr, stderr
+
+            result = run(mudl, temp, base + "/malformed", "malformed.bin",
+                         "--retries", "0")
+            stderr = result.stderr.decode(errors="replace")
+            assert result.returncode != 0, "malformed status line was accepted"
+            assert "Malformed status line" in stderr, stderr
+
+            result = run(mudl, temp, base + "/range", "bad-checksum.bin",
+                         "--checksum=md5=00000000000000000000000000000000")
+            stderr = result.stderr.decode(errors="replace")
+            assert result.returncode == 5, result.returncode
+            assert "Checksum mismatch" in stderr, stderr
+
+            command = [str(mudl), "-o", "D:\\absolute.bin",
+                       base + "/range"]
+            result = subprocess.run(command, capture_output=True, timeout=15)
+            stderr = result.stderr.decode(errors="replace")
+            assert result.returncode != 0, "absolute -o path was accepted"
+            assert "expects a filename only" in stderr, stderr
     finally:
         server.shutdown()
         server.server_close()
