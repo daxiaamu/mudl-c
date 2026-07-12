@@ -313,7 +313,8 @@ int persist_load(const char* path, segment_manager_t* mgr, int64_t file_size,
         s->downloaded = ps.downloaded;
         s->retry_count = ps.retry_count;
         s->crc32 = ps.crc32;
-        s->state = SEG_PENDING;  /* Always restart as PENDING */
+        /* Active/suspended work restarts as pending; completed ranges stay complete. */
+        s->state = (ps.state == SEG_COMPLETE) ? SEG_COMPLETE : SEG_PENDING;
         s->socket_fd = -1;
         s->speed_bps = 0;
 

@@ -10,6 +10,7 @@ import zlib
 
 DATA = bytes(range(256)) * 8192
 FLAKY_DATA = DATA * 17
+EXPAND_DATA = DATA * 8
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -56,6 +57,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_response(503)
                 self.send_header("Content-Length", "0")
                 self.end_headers()
+        elif self.path == "/expand":
+            self._range('"expand"', data=EXPAND_DATA)
         elif self.path == "/chunked":
             self.send_response(200)
             self.send_header("Transfer-Encoding", "chunked")
@@ -139,6 +142,74 @@ def main():
             assert "Downloaded 2.0 MB (avg " in output, output
             assert "Downloaded 1.0 MB" not in output, output
             assert hashlib.sha256(resume_file.read_bytes()).digest() == expected
+
+            expanded_file = temp / "expanded.bin"
+            expanded_partial = 128 * 1024
+            with expanded_file.open("wb") as stream:
+                stream.write(EXPAND_DATA[:expanded_partial])
+                stream.truncate(len(EXPAND_DATA))
+            expanded_validator = b'etag:"expand"'
+            expanded_header = struct.pack(
+                "<IIqIIIQ256s", 0x4D55444D, 3, len(EXPAND_DATA), 1, 1, 0, 0,
+                expanded_validator.ljust(256, b"\0"))
+            expanded_segment = struct.pack(
+                "<IqqqIII", 0, 0, len(EXPAND_DATA) - 1, expanded_partial, 1, 0,
+                zlib.crc32(EXPAND_DATA[:expanded_partial]) & 0xFFFFFFFF)
+            (temp / "expanded.bin.segments").write_bytes(
+                expanded_header + expanded_segment)
+            before = Handler.counts.get("/expand", 0)
+            command = [str(mudl), "-d", str(temp), "-o", "expanded.bin",
+                       "-c", "8", "--progress", "none", base + "/expand"]
+            result = subprocess.run(command, capture_output=True, timeout=15)
+            requests = Handler.counts.get("/expand", 0) - before
+            assert result.returncode == 0, result.stderr.decode(errors="replace")
+            assert requests >= 8, f"resume used only {requests} range requests"
+            assert hashlib.sha256(expanded_file.read_bytes()).digest() == \
+                   hashlib.sha256(EXPAND_DATA).digest()
+
+            mixed_file = temp / "mixed.bin"
+            boundary = len(EXPAND_DATA) // 2
+            mixed_partial = 128 * 1024
+            with mixed_file.open("wb") as stream:
+                stream.write(EXPAND_DATA[:boundary + mixed_partial])
+                stream.truncate(len(EXPAND_DATA))
+            mixed_header = struct.pack(
+                "<IIqIIIQ256s", 0x4D55444D, 3, len(EXPAND_DATA), 2, 2, 0, 0,
+                expanded_validator.ljust(256, b"\0"))
+            complete_segment = struct.pack(
+                "<IqqqIII", 0, 0, boundary - 1, boundary, 2, 0,
+                zlib.crc32(EXPAND_DATA[:boundary]) & 0xFFFFFFFF)
+            partial_segment = struct.pack(
+                "<IqqqIII", 1, boundary, len(EXPAND_DATA) - 1,
+                mixed_partial, 1, 0,
+                zlib.crc32(EXPAND_DATA[boundary:boundary + mixed_partial]) & 0xFFFFFFFF)
+            (temp / "mixed.bin.segments").write_bytes(
+                mixed_header + complete_segment + partial_segment)
+            command = [str(mudl), "-d", str(temp), "-o", "mixed.bin",
+                       "-c", "8", "--progress", "line", base + "/expand"]
+            result = subprocess.run(command, capture_output=True, timeout=15)
+            output = result.stdout.decode(errors="replace")
+            assert result.returncode == 0, result.stderr.decode(errors="replace")
+            assert "101.0%" not in output and "100.0%" in output, output
+            assert hashlib.sha256(mixed_file.read_bytes()).digest() == \
+                   hashlib.sha256(EXPAND_DATA).digest()
+
+            lowered_file = temp / "lowered.bin"
+            with lowered_file.open("wb") as stream:
+                stream.write(EXPAND_DATA[:boundary + mixed_partial])
+                stream.truncate(len(EXPAND_DATA))
+            (temp / "lowered.bin.segments").write_bytes(
+                mixed_header + complete_segment + partial_segment)
+            command = [str(mudl), "-d", str(temp), "-o", "lowered.bin",
+                       "-c", "1", "--progress", "line", base + "/expand"]
+            result = subprocess.run(command, capture_output=True, timeout=15)
+            output = result.stdout.decode(errors="replace")
+            assert result.returncode == 0, result.stderr.decode(errors="replace")
+            assert "Resuming from segments.bin (2 segments, 1 pending)" in output, output
+            assert "Method:  segmented (1 connection)" in output, output
+            assert "100.0%" in output, output
+            assert hashlib.sha256(lowered_file.read_bytes()).digest() == \
+                   hashlib.sha256(EXPAND_DATA).digest()
 
             result = run(mudl, temp, base + "/missing", "missing.bin")
             assert result.returncode != 0, "HTTP 404 was accepted"

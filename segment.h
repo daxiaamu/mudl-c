@@ -6,7 +6,6 @@
 #include <windows.h>
 
 #define MIN_SEGMENT_SIZE (1024 * 1024)  /* 1MB minimum per segment */
-#define ROLLBACK_THRESHOLD (64 * 1024)   /* 64KB min to steal */
 
 typedef enum {
     SEG_PENDING,
@@ -61,8 +60,8 @@ void segmgr_destroy(segment_manager_t* mgr);
 /* Get a pending segment for this thread. Returns NULL if none available. */
 segment_t* segmgr_acquire_pending(segment_manager_t* mgr);
 
-/* Try to steal work from another segment. Implements Segment RollBack. */
-segment_t* segmgr_try_steal(segment_manager_t* mgr, int thread_id);
+/* Split pending resume work before workers start, up to target_count. */
+int segmgr_expand_pending(segment_manager_t* mgr, int target_count);
 
 /* Mark segment as complete */
 void segmgr_complete(segment_manager_t* mgr, segment_t* seg);

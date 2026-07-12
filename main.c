@@ -325,7 +325,9 @@ int main(int argc, char** argv) {
                        sizeof(opts.resource_validator));
     http_close(&probe);
 
-    if (multi_supported && opts.connections > 1) {
+    /* The segmented engine also supports one worker. Keeping Range downloads
+       on this path preserves every verified segment when concurrency changes. */
+    if (multi_supported) {
         exit_code = download_multi(&opts, outpath, path, file_size);
     } else {
         if (file_size > 0)
@@ -626,7 +628,10 @@ static int download_single(options_t* opts, const char* outpath,
 static int download_multi(options_t* opts, const char* outpath,
                           const char* path, int64_t total_size) {
     int conn = opts->connections;
-    infof(opts, "Method:  multi-thread (%d connections)\n\n", conn);
+    if (conn == 1)
+        infof(opts, "Method:  segmented (1 connection)\n\n");
+    else
+        infof(opts, "Method:  multi-thread (%d connections)\n\n", conn);
 
     /* Build segments.bin path */
     char segpath[MAX_PATH * 2];
@@ -663,6 +668,18 @@ static int download_multi(options_t* opts, const char* outpath,
             return 1;
         }
         infof(opts, "Segments: %d\n", segmgr.segment_count);
+    } else {
+        int old_count = segmgr.segment_count;
+        int pending = segmgr_expand_pending(&segmgr, conn);
+        if (pending < 0) {
+            fprintf(stderr, "Error: failed to expand resume segments\n");
+            segmgr_destroy(&segmgr);
+            return 1;
+        }
+        if (segmgr.segment_count > old_count) {
+            infof(opts, "Resume segments expanded: %d -> %d for %d connections\n",
+                  old_count, segmgr.segment_count, conn);
+        }
     }
 
     segmgr.max_retries = opts->max_retries;

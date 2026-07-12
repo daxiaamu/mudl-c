@@ -113,77 +113,79 @@ segment_t* segmgr_acquire_pending(segment_manager_t* mgr) {
     return NULL;
 }
 
-segment_t* segmgr_try_steal(segment_manager_t* mgr, int thread_id) {
+int segmgr_expand_pending(segment_manager_t* mgr, int target_count) {
     EnterCriticalSection(&mgr->lock);
 
-    segment_t* best = NULL;
-    int best_idx = -1;
-    int64_t max_remaining = 0;
+    int pending_count = 0;
+    for (int i = 0; i < mgr->segment_count; i++)
+        if (mgr->segments[i].state == SEG_PENDING)
+            pending_count++;
 
-    for (int i = 0; i < mgr->segment_count; i++) {
-        segment_t* s = &mgr->segments[i];
-        if (s->state != SEG_DOWNLOADING) continue;
-
-        int64_t remaining = s->end_offset - s->start_offset + 1 - s->downloaded;
-        if (remaining < ROLLBACK_THRESHOLD) continue;
-
-        /* Estimate completion time */
-        if (s->speed_bps > 0) {
-            int64_t est_ms = remaining * 1000 / s->speed_bps;
-            if (est_ms < 500) continue;  /* too fast, don't bother */
+    while (pending_count < target_count) {
+        int best_idx = -1;
+        int64_t max_remaining = 0;
+        for (int i = 0; i < mgr->segment_count; i++) {
+            segment_t* s = &mgr->segments[i];
+            if (s->state != SEG_PENDING) continue;
+            int64_t remaining = s->end_offset - s->start_offset + 1 - s->downloaded;
+            if (remaining >= 2LL * MIN_SEGMENT_SIZE && remaining > max_remaining) {
+                max_remaining = remaining;
+                best_idx = i;
+            }
         }
+        if (best_idx < 0) break;
 
-        if (remaining > max_remaining) {
-            max_remaining = remaining;
-            best = s;
-            best_idx = i;
+        int old_count = mgr->segment_count;
+        segment_t* grown = (segment_t*)realloc(
+            mgr->segments, (size_t)(old_count + 1) * sizeof(segment_t));
+        if (!grown) {
+            LeaveCriticalSection(&mgr->lock);
+            return -1;
         }
+        mgr->segments = grown;
+
+        memmove(&mgr->segments[best_idx + 2],
+                &mgr->segments[best_idx + 1],
+                (size_t)(old_count - best_idx - 1) * sizeof(segment_t));
+
+        segment_t* original = &mgr->segments[best_idx];
+        int64_t old_end = original->end_offset;
+        int64_t new_len = max_remaining / 2;
+        int64_t new_start = old_end - new_len + 1;
+        original->end_offset = new_start - 1;
+
+        segment_t* added = &mgr->segments[best_idx + 1];
+        memset(added, 0, sizeof(*added));
+        added->start_offset = new_start;
+        added->end_offset = old_end;
+        added->state = SEG_PENDING;
+        added->socket_fd = -1;
+
+        mgr->segment_count++;
+        pending_count++;
+        for (int i = 0; i < mgr->segment_count; i++)
+            mgr->segments[i].index = i;
     }
 
-    if (!best) {
-        LeaveCriticalSection(&mgr->lock);
-        return NULL;
+    int needed = mgr->segment_count + 4;
+    if (mgr->pending_capacity < needed) {
+        int* grown = (int*)realloc(mgr->pending_queue,
+                                  (size_t)needed * sizeof(int));
+        if (!grown) {
+            LeaveCriticalSection(&mgr->lock);
+            return -1;
+        }
+        mgr->pending_queue = grown;
+        mgr->pending_capacity = needed;
     }
-
-    /* RollBack: split best segment, create new work */
-    int64_t old_end = best->end_offset;
-    int64_t steal_size = max_remaining / 2;
-    int64_t steal_start = best->end_offset - steal_size + 1;
-    best->end_offset -= steal_size;
-
-    /* Need a new segment slot. Resize if necessary. */
-    int new_idx = mgr->segment_count;
-    int new_count = mgr->segment_count + 1;
-    segment_t* new_segs = (segment_t*)realloc(mgr->segments, new_count * sizeof(segment_t));
-    if (!new_segs) {
-        best->end_offset = old_end; /* rollback the rollback */
-        LeaveCriticalSection(&mgr->lock);
-        return NULL;
-    }
-    mgr->segments = new_segs;
-    best = &mgr->segments[best_idx];
-
-    segment_t* new_seg = &mgr->segments[new_idx];
-    memset(new_seg, 0, sizeof(segment_t));
-    new_seg->index = new_idx;
-    new_seg->start_offset = steal_start;
-    new_seg->end_offset = steal_start + steal_size - 1;
-    new_seg->downloaded = 0;
-    new_seg->state = SEG_PENDING;
-    if (pending_enqueue_locked(mgr, new_idx) != 0) {
-        best->end_offset = old_end;
-        LeaveCriticalSection(&mgr->lock);
-        return NULL;
-    }
-    mgr->segment_count = new_count;
-
-    trace("RollBack: Thread(%d) stole %lld bytes from Seg(%d) -> new Seg(%d) [%lld-%lld]",
-          thread_id, (long long)steal_size, best->index, new_idx,
-          (long long)new_seg->start_offset, (long long)new_seg->end_offset);
+    mgr->pending_head = 0;
+    mgr->pending_tail = -1;
+    for (int i = 0; i < mgr->segment_count; i++)
+        if (mgr->segments[i].state == SEG_PENDING)
+            mgr->pending_queue[++mgr->pending_tail] = i;
 
     LeaveCriticalSection(&mgr->lock);
-    WakeConditionVariable(&mgr->cv_new_work);
-    return new_seg;
+    return pending_count;
 }
 
 void segmgr_complete(segment_manager_t* mgr, segment_t* seg) {
