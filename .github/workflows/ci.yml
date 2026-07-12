@@ -20,6 +20,7 @@ jobs:
           update: true
           install: >-
             mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-openssl
             make
             python
       - name: Build
@@ -28,6 +29,30 @@ jobs:
         run: make unit-test
       - name: HTTP integration tests
         run: make integration-test
+      - name: Generate localhost TLS certificate
+        run: >-
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1
+          -subj "/CN=localhost"
+          -addext "subjectAltName=DNS:localhost"
+          -keyout tests/tls-key.pem
+          -out tests/tls-cert.pem
+      - name: Trust localhost TLS certificate
+        shell: pwsh
+        run: |
+          $cert = Import-Certificate `
+            -FilePath tests/tls-cert.pem `
+            -CertStoreLocation Cert:\CurrentUser\Root
+          $cert.Thumbprint | Set-Content tests/tls-thumbprint.txt
+      - name: HTTPS SChannel integration tests
+        run: make https-test
+      - name: Remove localhost TLS certificate
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path tests/tls-thumbprint.txt) {
+            $thumbprint = (Get-Content tests/tls-thumbprint.txt).Trim()
+            Remove-Item "Cert:\CurrentUser\Root\$thumbprint" -ErrorAction SilentlyContinue
+          }
       - name: Upload tested executable
         uses: actions/upload-artifact@v7
         with:

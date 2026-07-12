@@ -14,7 +14,7 @@ RM = rm -f
 RM_TARGETS = $(OBJS) $(TARGET)
 endif
 
-.PHONY: all clean test unit-test integration-test
+.PHONY: all clean test unit-test integration-test https-test
 
 all: $(TARGET)
 
@@ -38,5 +38,8 @@ unit-test:
 
 integration-test: $(TARGET)
 	python tests/test_integration.py
+
+https-test: $(TARGET)
+	python tests/test_https.py tests/tls-cert.pem tests/tls-key.pem
 
 test: unit-test integration-test

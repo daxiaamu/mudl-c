@@ -8,6 +8,8 @@ All notable changes to MUDL-C are documented in this file.
 
 - Moved URL, proxy, and no-proxy parsing into a dedicated module with direct
   C unit tests.
+- Added Windows SChannel integration coverage for a trusted HTTPS download and
+  certificate hostname mismatch rejection.
 
 ## [0.5.10] - 2026-07-12
 
