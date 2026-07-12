@@ -38,6 +38,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             pass
 
 
+class TLSServer(http.server.ThreadingHTTPServer):
+    def __init__(self, address, handler, context):
+        self.tls_context = context
+        super().__init__(address, handler)
+
+    def get_request(self):
+        sock, address = super().get_request()
+        return self.tls_context.wrap_socket(sock, server_side=True), address
+
+
 def run(mudl, directory, url, output):
     return subprocess.run(
         [str(mudl), "-d", str(directory), "-o", output,
@@ -56,8 +66,7 @@ def main():
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(sys.argv[1], sys.argv[2])
 
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    server.socket = context.wrap_socket(server.socket, server_side=True)
+    server = TLSServer(("127.0.0.1", 0), Handler, context)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     port = server.server_address[1]
