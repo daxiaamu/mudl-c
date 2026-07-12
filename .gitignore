@@ -10,5 +10,6 @@ test_*
 !tests/
 !tests/test_integration.py
 !tests/test_segment.c
+!tests/test_options.c
 .DS_Store
 Thumbs.db

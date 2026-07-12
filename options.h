@@ -32,4 +32,6 @@ typedef struct {
     bool        version;
 } options_t;
 
+void options_parse(options_t* opts, int argc, char** argv);
+
 #endif /* OPTIONS_H */

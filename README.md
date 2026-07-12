@@ -66,7 +66,7 @@ Manual build:
 
 ```bash
 x86_64-w64-mingw32-gcc -std=c11 -O2 -Wall -Wextra -mconsole \
-  -o mudl.exe main.c http.c file_io.c progress.c utils.c \
+  -o mudl.exe main.c options.c http.c file_io.c progress.c utils.c \
   segment.c thread_pool.c persist.c checksum.c \
   -lws2_32 -lshlwapi -lsecur32 -lshell32 -ladvapi32
 strip mudl.exe
@@ -143,8 +143,8 @@ HTTPS downloads through an HTTP proxy use `CONNECT` tunneling. TLS is still hand
 ## Project Structure
 
 ```text
-main.c            Entry point, argument parsing, engine orchestration
-options.h         Command-line option model and defaults
+main.c            Entry point and download engine orchestration
+options.c / .h    Command-line parsing, option model, and defaults
 http.c / .h       HTTP/HTTPS client using SChannel
 file_io.c / .h    Thread-safe file I/O and UTF-8 path handling
 segment.c / .h    Segment manager
