@@ -3,6 +3,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 static void set_proxy_option(proxy_endpoint_t* dst, const char* value);
 static void parse_embedded_args(options_t* opts, char* arg_tail);
@@ -257,5 +258,37 @@ static void split_embedded_args(options_t* opts, char* value) {
 
     *q = 0;
     parse_embedded_args(opts, tail);
+}
+void options_print_help(void) {
+    printf("大侠阿木：daxiaamu.com\n");
+    printf("MUDL - Multi-threaded Universal Downloader\n");
+    printf("Usage: mudl [options] <URL>\n\n");
+    printf("Options:\n");
+    printf("  -o,  --output <FILE>      Output filename\n");
+    printf("  -d,  --dir <DIR>          Output directory\n");
+    printf("  -c,  --connections <N>    Connections (default %d, 1-32)\n", DEFAULT_CONNECTIONS);
+    printf("  -q,  --quiet              Hide detail logs, keep progress\n");
+    printf("  -p,  --progress <FORMAT>  Progress: bar|line|json|none\n");
+    printf("  -ua, --user-agent <UA>    Custom User-Agent\n");
+    printf("       --referer <URL>      Referer\n");
+    printf("       --header <K:V>       Custom HTTP header (repeatable)\n");
+    printf("       --timeout <SEC>      Timeout (default %d)\n", DEFAULT_TIMEOUT);
+    printf("       --retries <N>        Retries (default %d)\n", DEFAULT_RETRY);
+    printf("       --checksum <TYPE=DIGEST> Verify file checksum after download\n");
+    printf("       --proxy <PROXY>      Alias for --all-proxy\n");
+    printf("       --all-proxy <PROXY>  Proxy for all HTTP(S) downloads\n");
+    printf("       --http-proxy <PROXY> Proxy for HTTP downloads\n");
+    printf("       --https-proxy <PROXY> Proxy for HTTPS downloads\n");
+    printf("       --no-proxy <LIST>    Comma-separated hosts/domains/IP ranges\n");
+    printf("  -h,  --help               Show help\n");
+    printf("  -V,  --version            Show version\n\n");
+    printf("Examples:\n");
+    printf("  mudl https://example.com/file.zip\n");
+    printf("  mudl -c 8 https://example.com/large.iso\n");
+    printf("  mudl -q -p json https://example.com/file.bin\n");
+}
+void options_print_version(void) {
+    printf("MUDL v%s\n", MUDL_VERSION);
+    printf("Multi-threaded Universal Downloader (MUDL)\n");
 }
 

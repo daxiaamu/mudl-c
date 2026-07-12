@@ -33,5 +33,7 @@ typedef struct {
 } options_t;
 
 void options_parse(options_t* opts, int argc, char** argv);
+void options_print_help(void);
+void options_print_version(void);
 
 #endif /* OPTIONS_H */
