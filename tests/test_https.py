@@ -78,9 +78,11 @@ def main():
                 "https://raw.githubusercontent.com/daxiaamu/mudl-c/main/LICENSE")
             result = run(mudl, temp, trusted_url, "trusted-license.txt")
             assert result.returncode == 0, result.stderr.decode(errors="replace")
-            assert hashlib.sha256(
-                (temp / "trusted-license.txt").read_bytes()).digest() == \
-                   hashlib.sha256((root / "LICENSE").read_bytes()).digest()
+            downloaded = (temp / "trusted-license.txt").read_bytes().replace(
+                b"\r\n", b"\n")
+            expected = (root / "LICENSE").read_bytes().replace(b"\r\n", b"\n")
+            assert hashlib.sha256(downloaded).digest() == \
+                   hashlib.sha256(expected).digest()
 
             result = run(
                 mudl, temp, f"https://localhost:{port}/range", "untrusted.bin")
