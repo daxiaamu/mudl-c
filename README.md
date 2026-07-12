@@ -66,7 +66,7 @@ Manual build:
 
 ```bash
 x86_64-w64-mingw32-gcc -std=c11 -O2 -Wall -Wextra -mconsole \
-  -o mudl.exe main.c options.c engine.c http.c url.c file_io.c progress.c utils.c \
+  -o mudl.exe main.c options.c engine.c http.c url.c schannel.c file_io.c progress.c utils.c \
   segment.c thread_pool.c persist.c checksum.c \
   -lws2_32 -lshlwapi -lsecur32 -lshell32 -ladvapi32
 strip mudl.exe
@@ -147,7 +147,8 @@ main.c            Process entry, console setup, and signal forwarding
 options.c / .h    Command-line parsing, option model, and defaults
 engine.c / .h     Download probing, orchestration, and completion checks
 url.c / .h        URL, proxy, and no-proxy parsing
-http.c / .h       HTTP/HTTPS client using SChannel
+http.c / .h       HTTP request, response, and transport orchestration
+schannel.c / .h   Windows SChannel TLS handshake and encrypted I/O
 file_io.c / .h    Thread-safe file I/O and UTF-8 path handling
 segment.c / .h    Segment manager
 thread_pool.c/.h  Worker thread pool

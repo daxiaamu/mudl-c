@@ -10,6 +10,8 @@ All notable changes to MUDL-C are documented in this file.
   C unit tests.
 - Added Windows SChannel integration coverage for a trusted public HTTPS
   download and self-signed certificate rejection.
+- Moved the SChannel handshake and encrypted I/O state machine into a dedicated
+  module with an opaque TLS context owned by the HTTP client.
 
 ## [0.5.10] - 2026-07-12
 
