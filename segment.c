@@ -4,6 +4,36 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Caller must hold mgr->lock. Reuse consumed queue space before growing. */
+static int pending_enqueue_locked(segment_manager_t* mgr, int index) {
+    if (mgr->pending_tail + 1 >= mgr->pending_capacity) {
+        int pending = mgr->pending_tail - mgr->pending_head + 1;
+        if (pending > 0) {
+            memmove(mgr->pending_queue,
+                    mgr->pending_queue + mgr->pending_head,
+                    (size_t)pending * sizeof(int));
+            mgr->pending_head = 0;
+            mgr->pending_tail = pending - 1;
+        } else {
+            mgr->pending_head = 0;
+            mgr->pending_tail = -1;
+        }
+    }
+
+    if (mgr->pending_tail + 1 >= mgr->pending_capacity) {
+        int new_capacity = mgr->pending_capacity > 0
+                         ? mgr->pending_capacity * 2 : 8;
+        int* grown = (int*)realloc(mgr->pending_queue,
+                                  (size_t)new_capacity * sizeof(int));
+        if (!grown) return -1;
+        mgr->pending_queue = grown;
+        mgr->pending_capacity = new_capacity;
+    }
+
+    mgr->pending_queue[++mgr->pending_tail] = index;
+    return 0;
+}
+
 int segmgr_init(segment_manager_t* mgr, int64_t file_size, int max_connections) {
     memset(mgr, 0, sizeof(segment_manager_t));
     mgr->file_size = file_size;
@@ -87,6 +117,7 @@ segment_t* segmgr_try_steal(segment_manager_t* mgr, int thread_id) {
     EnterCriticalSection(&mgr->lock);
 
     segment_t* best = NULL;
+    int best_idx = -1;
     int64_t max_remaining = 0;
 
     for (int i = 0; i < mgr->segment_count; i++) {
@@ -105,6 +136,7 @@ segment_t* segmgr_try_steal(segment_manager_t* mgr, int thread_id) {
         if (remaining > max_remaining) {
             max_remaining = remaining;
             best = s;
+            best_idx = i;
         }
     }
 
@@ -129,13 +161,7 @@ segment_t* segmgr_try_steal(segment_manager_t* mgr, int thread_id) {
         return NULL;
     }
     mgr->segments = new_segs;
-
-    /* Grow pending queue if needed */
-    if (mgr->pending_tail >= mgr->pending_capacity - 1) {
-        mgr->pending_capacity += 4;
-        mgr->pending_queue = (int*)realloc(mgr->pending_queue,
-                                           mgr->pending_capacity * sizeof(int));
-    }
+    best = &mgr->segments[best_idx];
 
     segment_t* new_seg = &mgr->segments[new_idx];
     memset(new_seg, 0, sizeof(segment_t));
@@ -144,8 +170,12 @@ segment_t* segmgr_try_steal(segment_manager_t* mgr, int thread_id) {
     new_seg->end_offset = steal_start + steal_size - 1;
     new_seg->downloaded = 0;
     new_seg->state = SEG_PENDING;
+    if (pending_enqueue_locked(mgr, new_idx) != 0) {
+        best->end_offset = old_end;
+        LeaveCriticalSection(&mgr->lock);
+        return NULL;
+    }
     mgr->segment_count = new_count;
-    mgr->pending_queue[++mgr->pending_tail] = new_idx;
 
     trace("RollBack: Thread(%d) stole %lld bytes from Seg(%d) -> new Seg(%d) [%lld-%lld]",
           thread_id, (long long)steal_size, best->index, new_idx,
@@ -269,8 +299,11 @@ int segmgr_suspend_slowest(segment_manager_t* mgr) {
         return -1;
     }
 
+    if (pending_enqueue_locked(mgr, s->index) != 0) {
+        LeaveCriticalSection(&mgr->lock);
+        return -1;
+    }
     s->state = SEG_PENDING;
-    mgr->pending_queue[++mgr->pending_tail] = s->index;
     mgr->active_count--;
 
     trace("Degrade: suspended slowest Seg(%d) speed=%lld, remaining=%lld",
@@ -302,13 +335,16 @@ int segmgr_retry_expired(segment_manager_t* mgr) {
     for (int i = 0; i < mgr->segment_count; i++) {
         segment_t* s = &mgr->segments[i];
         if (s->state == SEG_SUSPENDED && s->suspend_until_ms <= now) {
+            if (pending_enqueue_locked(mgr, s->index) != 0) {
+                mgr->fatal_error = true;
+                break;
+            }
             s->state = SEG_PENDING;
-            mgr->pending_queue[++mgr->pending_tail] = s->index;
             count++;
         }
     }
     LeaveCriticalSection(&mgr->lock);
-    if (count > 0) WakeConditionVariable(&mgr->cv_new_work);
+    if (count > 0) WakeAllConditionVariable(&mgr->cv_new_work);
     return count;
 }
 

@@ -7,6 +7,7 @@ import threading
 
 
 DATA = bytes(range(256)) * 8192
+FLAKY_DATA = DATA * 17
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -22,15 +23,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.counts[self.path] = count
             return count
 
-    def _range(self, etag, total=None):
+    def _range(self, etag, total=None, data=DATA):
         value = self.headers.get("Range", "bytes=0-")[6:]
         start_text, end_text = value.split("-", 1)
         start = int(start_text)
-        end = int(end_text) if end_text else len(DATA) - 1
-        body = DATA[start : end + 1]
+        end = int(end_text) if end_text else len(data) - 1
+        body = data[start : end + 1]
         self.send_response(206)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Content-Range", f"bytes {start}-{end}/{total or len(DATA)}")
+        self.send_header("Content-Range", f"bytes {start}-{end}/{total or len(data)}")
         self.send_header("ETag", etag)
         self.end_headers()
         try:
@@ -46,6 +47,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._range('"probe"' if count == 1 else '"changed"')
         elif self.path == "/wrong-total":
             self._range('"stable"', len(DATA) if count == 1 else len(DATA) + 1)
+        elif self.path == "/flaky":
+            if count == 1 or count > 33:
+                self._range('"stable"', data=FLAKY_DATA)
+            else:
+                self.send_response(503)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
         elif self.path == "/chunked":
             self.send_response(200)
             self.send_header("Transfer-Encoding", "chunked")
@@ -101,6 +109,12 @@ def main():
             result = run(mudl, temp, base + "/wrong-total", "wrong-total.bin",
                          "-c", "2", "--retries", "0")
             assert result.returncode != 0, "changed Content-Range total was accepted"
+
+            result = run(mudl, temp, base + "/flaky", "flaky.bin",
+                         "-c", "32", "--retries", "1", timeout=30)
+            assert result.returncode == 0, result.stderr.decode(errors="replace")
+            assert hashlib.sha256((temp / "flaky.bin").read_bytes()).digest() == \
+                   hashlib.sha256(FLAKY_DATA).digest()
 
             result = run(mudl, temp, base + "/missing", "missing.bin")
             assert result.returncode != 0, "HTTP 404 was accepted"

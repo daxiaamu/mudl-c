@@ -65,23 +65,11 @@ DWORD WINAPI worker_thread_func(LPVOID param) {
             /* Nothing to do - wait for new work or completion */
             if (segmgr_all_done(mgr) || segmgr_has_error(mgr)) break;
 
+            if (segmgr_retry_expired(mgr) > 0)
+                continue;
+
             EnterCriticalSection(&mgr->lock);
-            if (mgr->pending_head > mgr->pending_tail && mgr->active_count == 0 && !segmgr_all_done(mgr)) {
-                /* All remaining segments might be SUSPENDED - set them back to PENDING */
-                for (int i = 0; i < mgr->segment_count; i++) {
-                    if (mgr->segments[i].state == SEG_SUSPENDED &&
-                        mgr->segments[i].suspend_until_ms <= GetTickCount64()) {
-                        mgr->segments[i].state = SEG_PENDING;
-                        mgr->pending_queue[++mgr->pending_tail] = i;
-                    }
-                }
-                if (mgr->pending_head <= mgr->pending_tail) {
-                    LeaveCriticalSection(&mgr->lock);
-                    WakeConditionVariable(&mgr->cv_new_work);
-                    continue;
-                }
-            }
-            /* No SUSPENDED ready either - wait */
+            /* No suspended segment is ready yet; retry after the timeout. */
             BOOL ok = SleepConditionVariableCS(&mgr->cv_new_work, &mgr->lock, 1000);
             LeaveCriticalSection(&mgr->lock);
             if (!ok && GetLastError() == ERROR_TIMEOUT) continue;

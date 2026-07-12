@@ -18,7 +18,7 @@
 #include "persist.h"
 #include "checksum.h"
 
-#define VERSION "0.5.7"
+#define VERSION "0.5.8"
 #define DEFAULT_CONNECTIONS 8
 #define DEFAULT_TIMEOUT 30
 #define DEFAULT_RETRY 5
