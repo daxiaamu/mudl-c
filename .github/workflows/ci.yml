@@ -44,8 +44,11 @@ jobs:
           $certPath = (Resolve-Path tests/tls-cert.pem).Path
           $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($certPath)
           $cert.Thumbprint | Set-Content tests/tls-thumbprint.txt
-          certutil.exe -user -f -addstore Root $certPath
-          if ($LASTEXITCODE -ne 0) { throw "certutil add failed" }
+          $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+            "Root", [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+          $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+          $store.Add($cert)
+          $store.Close()
       - name: HTTPS SChannel integration tests
         run: make https-test
       - name: Remove localhost TLS certificate
@@ -54,7 +57,14 @@ jobs:
         run: |
           if (Test-Path tests/tls-thumbprint.txt) {
             $thumbprint = (Get-Content tests/tls-thumbprint.txt).Trim()
-            certutil.exe -user -f -delstore Root $thumbprint
+            $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+              "Root", [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+            $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+            $matches = $store.Certificates.Find(
+              [System.Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
+              $thumbprint, $false)
+            foreach ($cert in $matches) { $store.Remove($cert) }
+            $store.Close()
           }
       - name: Upload tested executable
         uses: actions/upload-artifact@v7
