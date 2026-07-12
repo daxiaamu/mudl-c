@@ -6,7 +6,6 @@
 *.segments.tmp
 *.segments.bak
 tests/tls-*.pem
-tests/tls-thumbprint.txt
 test_*
 !test_source.bin
 !tests/

@@ -65,16 +65,19 @@ def main():
     try:
         with tempfile.TemporaryDirectory() as directory:
             temp = pathlib.Path(directory)
-            result = run(mudl, temp, f"https://localhost:{port}/range", "tls.bin")
+            trusted_url = (
+                "https://raw.githubusercontent.com/daxiaamu/mudl-c/main/LICENSE")
+            result = run(mudl, temp, trusted_url, "trusted-license.txt")
             assert result.returncode == 0, result.stderr.decode(errors="replace")
-            assert hashlib.sha256((temp / "tls.bin").read_bytes()).digest() == \
-                   hashlib.sha256(DATA).digest()
+            assert hashlib.sha256(
+                (temp / "trusted-license.txt").read_bytes()).digest() == \
+                   hashlib.sha256((root / "LICENSE").read_bytes()).digest()
 
             result = run(
-                mudl, temp, f"https://127.0.0.1:{port}/range", "mismatch.bin")
+                mudl, temp, f"https://localhost:{port}/range", "untrusted.bin")
             stderr = result.stderr.decode(errors="replace")
-            assert result.returncode != 0, "hostname mismatch was accepted"
-            assert "certificate hostname mismatch" in stderr, stderr
+            assert result.returncode != 0, "self-signed certificate was accepted"
+            assert "certificate chain is not trusted" in stderr, stderr
     finally:
         server.shutdown()
         server.server_close()
