@@ -41,10 +41,11 @@ jobs:
       - name: Trust localhost TLS certificate
         shell: pwsh
         run: |
-          $cert = Import-Certificate `
-            -FilePath tests/tls-cert.pem `
-            -CertStoreLocation Cert:\CurrentUser\Root
+          $certPath = (Resolve-Path tests/tls-cert.pem).Path
+          $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($certPath)
           $cert.Thumbprint | Set-Content tests/tls-thumbprint.txt
+          certutil.exe -user -f -addstore Root $certPath
+          if ($LASTEXITCODE -ne 0) { throw "certutil add failed" }
       - name: HTTPS SChannel integration tests
         run: make https-test
       - name: Remove localhost TLS certificate
@@ -53,7 +54,7 @@ jobs:
         run: |
           if (Test-Path tests/tls-thumbprint.txt) {
             $thumbprint = (Get-Content tests/tls-thumbprint.txt).Trim()
-            Remove-Item "Cert:\CurrentUser\Root\$thumbprint" -ErrorAction SilentlyContinue
+            certutil.exe -user -f -delstore Root $thumbprint
           }
       - name: Upload tested executable
         uses: actions/upload-artifact@v7
