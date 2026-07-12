@@ -2,6 +2,13 @@
 
 All notable changes to MUDL-C are documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- Moved URL, proxy, and no-proxy parsing into a dedicated module with direct
+  C unit tests.
+
 ## [0.5.10] - 2026-07-12
 
 ### Added
