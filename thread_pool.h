@@ -24,8 +24,6 @@ typedef struct {
     file_t*      output_file;
     volatile bool* interrupted;
     int64_t*     global_downloaded;
-    int64_t*     global_speed;
-    CRITICAL_SECTION* speed_lock;
 } worker_ctx_t;
 
 /* Start N worker threads. Returns array of thread handles. */

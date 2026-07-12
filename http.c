@@ -895,6 +895,8 @@ int http_request(http_client_t* cli, http_method_t method,
                          "Range: bytes=%s", range_start);
         if (range_end && range_end[0])
             pos += _snprintf(req + pos, sizeof(req) - pos, "-%s", range_end);
+        else if (!str_ends_with(range_start, "-"))
+            pos += _snprintf(req + pos, sizeof(req) - pos, "-");
         pos += _snprintf(req + pos, sizeof(req) - pos, "\r\n");
     }
 

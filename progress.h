@@ -14,6 +14,7 @@ typedef enum {
 typedef struct {
     progress_mode_t mode;
     int64_t         downloaded;
+    int64_t         initial_downloaded;
     int64_t         total;
     int64_t         speed_bps;
     int             threads_active;
@@ -24,7 +25,7 @@ typedef struct {
 } progress_t;
 
 void progress_init(progress_t* p, progress_mode_t mode,
-                   int64_t total, int threads);
+                   int64_t total, int64_t initial_downloaded, int threads);
 void progress_update(progress_t* p, int64_t downloaded,
                      int64_t speed, int active, int total);
 void progress_done(progress_t* p);

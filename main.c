@@ -198,7 +198,7 @@ typedef struct {
     volatile bool*     running;
 } engine_ctx_t;
 
-static void speed_init(speed_tracker_t* st);
+static void speed_init(speed_tracker_t* st, int64_t initial_downloaded);
 static void speed_tick(speed_tracker_t* st, int64_t total_downloaded);
 
 int main(int argc, char** argv) {
@@ -393,7 +393,7 @@ static int download_single(options_t* opts, const char* outpath,
     }
 
     progress_t prog;
-    progress_init(&prog, opts->progress_mode, file_size, 1);
+    progress_init(&prog, opts->progress_mode, file_size, resume_pos, 1);
 
     file_t f;
     if (file_open(&f, outpath, file_size) != 0) {
@@ -500,7 +500,7 @@ static int download_single(options_t* opts, const char* outpath,
     uint32_t download_crc32 = resume_crc32;
     bool download_error = false;
     speed_tracker_t st;
-    speed_init(&st);
+    speed_init(&st, resume_pos);
     uint64_t last_save_ms = GetTickCount64();
 
     while (!g_interrupted) {
@@ -676,8 +676,9 @@ static int download_multi(options_t* opts, const char* outpath,
     }
 
     /* Speed tracker */
+    int64_t initial_downloaded = segmgr_total_downloaded(&segmgr);
     speed_tracker_t st;
-    speed_init(&st);
+    speed_init(&st, initial_downloaded);
 
     /* Worker context */
     worker_ctx_t base_ctx;
@@ -694,8 +695,10 @@ static int download_multi(options_t* opts, const char* outpath,
     base_ctx.output_file = &output_file;
     base_ctx.interrupted = &g_interrupted;
     base_ctx.global_downloaded = &st.downloaded;
-    base_ctx.global_speed = &st.speed;
-    base_ctx.speed_lock = &st.lock;
+
+    progress_t prog;
+    progress_init(&prog, opts->progress_mode, total_size,
+                  initial_downloaded, conn);
 
     /* Start workers */
     int actual_count;
@@ -710,10 +713,6 @@ static int download_multi(options_t* opts, const char* outpath,
     }
 
     infof(opts, "Started %d workers\n", actual_count);
-
-    /* Progress / monitor loop */
-    progress_t prog;
-    progress_init(&prog, opts->progress_mode, total_size, actual_count);
 
     uint64_t last_save_ms = GetTickCount64();
 
@@ -803,12 +802,12 @@ static int download_multi(options_t* opts, const char* outpath,
 }
 
 /* ===== Speed tracker ===== */
-void speed_init(speed_tracker_t* st) {
+void speed_init(speed_tracker_t* st, int64_t initial_downloaded) {
     InitializeCriticalSection(&st->lock);
-    st->downloaded = 0;
+    st->downloaded = initial_downloaded;
     st->speed = 0;
     st->last_time = GetTickCount64();
-    st->last_bytes = 0;
+    st->last_bytes = initial_downloaded;
 }
 
 void speed_tick(speed_tracker_t* st, int64_t total_downloaded) {

@@ -1,9 +1,11 @@
 import hashlib
 import http.server
 import pathlib
+import struct
 import subprocess
 import tempfile
 import threading
+import zlib
 
 
 DATA = bytes(range(256)) * 8192
@@ -115,6 +117,28 @@ def main():
             assert result.returncode == 0, result.stderr.decode(errors="replace")
             assert hashlib.sha256((temp / "flaky.bin").read_bytes()).digest() == \
                    hashlib.sha256(FLAKY_DATA).digest()
+
+            resume_file = temp / "resume.bin"
+            partial = len(DATA) // 2
+            with resume_file.open("wb") as stream:
+                stream.write(DATA[:partial])
+                stream.truncate(len(DATA))
+            validator = b'etag:"stable"'
+            header = struct.pack(
+                "<IIqIIIQ256s", 0x4D55444D, 3, len(DATA), 1, 1, 0, 0,
+                validator.ljust(256, b"\0"))
+            segment = struct.pack(
+                "<IqqqIII", 0, 0, len(DATA) - 1, partial, 1, 0,
+                zlib.crc32(DATA[:partial]) & 0xFFFFFFFF)
+            (temp / "resume.bin.segments").write_bytes(header + segment)
+            command = [str(mudl), "-d", str(temp), "-o", "resume.bin",
+                       "-c", "1", "--progress", "line", base + "/range"]
+            result = subprocess.run(command, capture_output=True, timeout=15)
+            output = result.stdout.decode(errors="replace")
+            assert result.returncode == 0, result.stderr.decode(errors="replace")
+            assert "Downloaded 2.0 MB (avg " in output, output
+            assert "Downloaded 1.0 MB" not in output, output
+            assert hashlib.sha256(resume_file.read_bytes()).digest() == expected
 
             result = run(mudl, temp, base + "/missing", "missing.bin")
             assert result.returncode != 0, "HTTP 404 was accepted"

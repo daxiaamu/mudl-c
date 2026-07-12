@@ -5,10 +5,12 @@
 #include <windows.h>
 
 void progress_init(progress_t* p, progress_mode_t mode,
-                   int64_t total, int threads) {
+                   int64_t total, int64_t initial_downloaded, int threads) {
     memset(p, 0, sizeof(progress_t));
     p->mode = mode;
     p->total = total;
+    p->downloaded = initial_downloaded;
+    p->initial_downloaded = initial_downloaded;
     p->threads_total = threads;
     p->start_time_ms = now_ms();
 }
@@ -132,13 +134,15 @@ void progress_done(progress_t* p) {
     p->finished = true;
     uint64_t elapsed_ms = now_ms() - p->start_time_ms;
     double elapsed_sec = elapsed_ms / 1000.0;
+    int64_t session_downloaded = p->downloaded - p->initial_downloaded;
+    if (session_downloaded < 0) session_downloaded = 0;
 
     if (p->mode == PROGRESS_BAR || p->mode == PROGRESS_LINE) {
         printf("\n");
-        printf("Downloaded %s in %.1fs (avg %s)\n",
-               fmt_bytes(p->downloaded), elapsed_sec,
+        printf("Downloaded %s (avg %s)\n",
+               fmt_bytes(p->downloaded),
                fmt_speed(elapsed_sec > 0
-                         ? (int64_t)(p->downloaded / elapsed_sec)
+                         ? (int64_t)(session_downloaded / elapsed_sec)
                          : 0));
     } else if (p->mode == PROGRESS_JSON) {
         printf("{\"t\":%llu,\"dl\":%lld,\"sz\":%lld,\"elapsed\":%.1f,"

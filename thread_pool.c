@@ -208,21 +208,6 @@ DWORD WINAPI worker_thread_func(LPVOID param) {
             /* Update speed every 500ms */
             uint64_t now = GetTickCount64();
             if (now - last_speed_ms >= 500) {
-                int64_t elapsed = now - last_speed_ms;
-                if (elapsed > 0) {
-                    EnterCriticalSection(ctx->speed_lock);
-                    int64_t total = *ctx->global_downloaded;
-                    /* Use a period-based speed calculation shared across threads */
-                    static uint64_t prev_time = 0;
-                    static int64_t prev_bytes = 0;
-                    uint64_t dt = now - prev_time;
-                    if (dt > 0 && prev_time > 0) {
-                        *ctx->global_speed = (total - prev_bytes) * 1000 / (int64_t)dt;
-                    }
-                    prev_time = now;
-                    prev_bytes = total;
-                    LeaveCriticalSection(ctx->speed_lock);
-                }
                 seg->speed_bps = chunk_bytes * 1000 / (int64_t)(now - last_speed_ms + 1);
                 chunk_bytes = 0;
                 last_speed_ms = now;
