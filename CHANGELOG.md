@@ -2,6 +2,13 @@
 
 All notable changes to MUDL-C are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Manual GitHub Actions runs through `workflow_dispatch`.
+- A tested `mudl.exe` Actions artifact after successful CI runs.
+
 ## [0.5.9] - 2026-07-12
 
 ### Added

@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   windows-mingw:
@@ -27,3 +28,9 @@ jobs:
         run: make unit-test
       - name: HTTP integration tests
         run: make integration-test
+      - name: Upload tested executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: mudl-windows-x64
+          path: mudl.exe
+          if-no-files-found: error

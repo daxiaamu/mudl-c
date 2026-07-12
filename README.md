@@ -4,6 +4,10 @@
 
 See [CHANGELOG.md](CHANGELOG.md) for release history.
 
+Every CI run builds and tests the Windows executable. Successful runs provide
+a `mudl-windows-x64` artifact, and CI can also be started manually from the
+Actions page.
+
 > **Nano CLI download manager for Windows** - a small, dependency-free C downloader built on Win32 and SChannel.
 
 ## Features
