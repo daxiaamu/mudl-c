@@ -2,7 +2,7 @@
 
 All notable changes to MUDL-C are documented in this file.
 
-## [Unreleased]
+## [0.5.11] - 2026-07-13
 
 ### Changed
 
@@ -12,6 +12,8 @@ All notable changes to MUDL-C are documented in this file.
   download and self-signed certificate rejection.
 - Moved the SChannel handshake and encrypted I/O state machine into a dedicated
   module with an opaque TLS context owned by the HTTP client.
+- Added automatic Makefile header dependency tracking for reliable incremental
+  rebuilds after `.h` changes.
 
 ## [0.5.10] - 2026-07-12
 
@@ -57,6 +59,7 @@ All notable changes to MUDL-C are documented in this file.
 - Resume speed reporting and final summaries to follow aria2-style semantics.
 - Early EOF, disk short-write, and malformed partial-response handling.
 
+[0.5.11]: https://github.com/daxiaamu/mudl-c/compare/v0.5.10...v0.5.11
 [0.5.10]: https://github.com/daxiaamu/mudl-c/compare/v0.5.9...v0.5.10
 [0.5.9]: https://github.com/daxiaamu/mudl-c/compare/v0.5.8...v0.5.9
 [0.5.8]: https://github.com/daxiaamu/mudl-c/compare/v0.5.7...v0.5.8

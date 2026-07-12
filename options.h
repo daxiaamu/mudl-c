@@ -7,7 +7,7 @@
 #include "http.h"
 #include "progress.h"
 
-#define MUDL_VERSION "0.5.10"
+#define MUDL_VERSION "0.5.11"
 #define DEFAULT_CONNECTIONS 8
 #define DEFAULT_TIMEOUT 30
 #define DEFAULT_RETRY 5
