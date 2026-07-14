@@ -19,14 +19,19 @@ bool url_is_oppo_download_check(const char* url) {
 
     static const char suffix_tech[] = ".allawntech.com";
     static const char suffix_os[] = ".allawnos.com";
+    static const char suffix_coloros[] = ".coloros.com";
     size_t host_len = (size_t)(host_end - host);
     size_t tech_len = sizeof(suffix_tech) - 1;
     size_t os_len = sizeof(suffix_os) - 1;
+    size_t coloros_len = sizeof(suffix_coloros) - 1;
     bool tech_match = host_len > tech_len &&
         _strnicmp(host + host_len - tech_len, suffix_tech, tech_len) == 0;
     bool os_match = host_len > os_len &&
         _strnicmp(host + host_len - os_len, suffix_os, os_len) == 0;
-    if (!tech_match && !os_match)
+    bool coloros_match = host_len > coloros_len &&
+        _strnicmp(host + host_len - coloros_len,
+                  suffix_coloros, coloros_len) == 0;
+    if (!tech_match && !os_match && !coloros_match)
         return false;
     return _strnicmp(path, "/downloadCheck?", 15) == 0;
 }
