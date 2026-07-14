@@ -17,16 +17,11 @@ bool url_is_oppo_download_check(const char* url) {
     const char* port = memchr(host, ':', (size_t)(host_end - host));
     if (port) host_end = port;
 
-    static const char suffix_os[] = ".allawnos.com";
-    static const char suffix_tech[] = ".allawntech.com";
+    static const char suffix[] = ".allawntech.com";
     size_t host_len = (size_t)(host_end - host);
-    size_t os_len = sizeof(suffix_os) - 1;
-    size_t tech_len = sizeof(suffix_tech) - 1;
-    bool os_match = host_len > os_len &&
-        _strnicmp(host + host_len - os_len, suffix_os, os_len) == 0;
-    bool tech_match = host_len > tech_len &&
-        _strnicmp(host + host_len - tech_len, suffix_tech, tech_len) == 0;
-    if (!os_match && !tech_match)
+    size_t suffix_len = sizeof(suffix) - 1;
+    if (host_len <= suffix_len ||
+        _strnicmp(host + host_len - suffix_len, suffix, suffix_len) != 0)
         return false;
     return _strnicmp(path, "/downloadCheck?", 15) == 0;
 }

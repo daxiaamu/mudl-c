@@ -17,7 +17,7 @@ Actions page.
 | Multi-thread downloads | Parallel HTTP range downloads, up to 32 connections |
 | Strict resume | Validates segment CRC32 plus the remote ETag/Last-Modified identity |
 | Signed URLs | Handles long redirect URLs used by cloud/CDN signed links |
-| OPPO OS 16 links | Resolves `https://*.allawnos.com/downloadCheck?...` and `https://*.allawntech.com/downloadCheck?...` links and refreshes expired OSS tickets transparently |
+| OPPO OS 16 links | Resolves `https://*.allawntech.com/downloadCheck?...` links and refreshes expired OSS tickets transparently |
 | Native HTTPS | Uses Windows SChannel, no bundled OpenSSL |
 | UTF-8 paths | Supports non-ASCII output filenames through Windows wide APIs |
 | Progress output | Console progress bar, log-friendly lines, or JSON output |
@@ -29,12 +29,11 @@ mudl "https://example.com/file.zip"
 mudl -c 1 "https://example.com/file.zip"
 mudl -c 16 -d downloads -o output.zip "https://example.com/file.iso"
 mudl --progress line "https://example.com/file.zip"
-mudl -c 16 -o ota.zip "https://component-ota-cn.allawnos.com/downloadCheck?..."
+mudl -c 16 -o ota.zip "https://component-ota-cn.allawntech.com/downloadCheck?..."
 ```
 
-OPPO/ColorOS 16 `https://*.allawnos.com/downloadCheck?...` and
-`https://*.allawntech.com/downloadCheck?...` URLs are detected automatically.
-MUDL sends a
+OPPO/ColorOS 16 `https://*.allawntech.com/downloadCheck?...` URLs are detected
+automatically. MUDL sends a
 `HEAD` request with `userid: oplus-ota|`, downloads from the returned
 `Location`, and obtains a new signed OSS URL when a range request returns
 401, 403, or 416. Ticket refreshes do not consume normal segment retries.
