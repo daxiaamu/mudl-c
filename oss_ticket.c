@@ -20,7 +20,7 @@ static int resolve_locked(oss_ticket_t* ticket, char* err, int err_n) {
     int port;
     if (http_parse_url(ticket->check_url, scheme, sizeof(scheme),
                        host, sizeof(host), &port, path, sizeof(path)) != 0) {
-        _snprintf(err, err_n, "Invalid downloadCheck URL");
+        _snprintf(err, err_n, "Invalid compatibility URL");
         http_close(&cli);
         return -1;
     }
@@ -44,12 +44,12 @@ static int resolve_locked(oss_ticket_t* ticket, char* err, int err_n) {
 
     if (!resp.location[0]) {
         _snprintf(err, err_n,
-                  "downloadCheck HEAD returned HTTP %d without Location",
+                  "Compatibility endpoint returned HTTP %d without Location",
                   resp.status_code);
         return -1;
     }
     if (!strstr(resp.location, "://")) {
-        _snprintf(err, err_n, "downloadCheck returned a relative Location");
+        _snprintf(err, err_n, "Compatibility endpoint returned a relative URL");
         return -1;
     }
 
@@ -110,7 +110,7 @@ void oss_ticket_set_current(oss_ticket_t* ticket, const char* url) {
 int oss_ticket_refresh(oss_ticket_t* ticket, unsigned long observed_generation,
                        char* err, int err_n) {
     if (!ticket || !ticket->enabled) {
-        _snprintf(err, err_n, "URL has no renewable downloadCheck ticket");
+        _snprintf(err, err_n, "URL is not renewable by the compatibility layer");
         return -1;
     }
 
