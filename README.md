@@ -17,7 +17,7 @@ Actions page.
 | Multi-thread downloads | Parallel HTTP range downloads, up to 32 connections |
 | Strict resume | Validates segment CRC32 plus the remote ETag/Last-Modified identity |
 | Signed URLs | Handles long redirect URLs used by cloud/CDN signed links |
-| Plus edition | Additional compatibility enhancements with the same command-line interface |
+| Experimental edition | Experimental compatibility enhancements with the same command-line interface |
 | Native HTTPS | Uses Windows SChannel, no bundled OpenSSL |
 | UTF-8 paths | Supports non-ASCII output filenames through Windows wide APIs |
 | Progress output | Console progress bar, log-friendly lines, or JSON output |
@@ -31,8 +31,8 @@ mudl -c 16 -d downloads -o output.zip "https://example.com/file.iso"
 mudl --progress line "https://example.com/file.zip"
 ```
 
-MUDL Plus includes additional compatibility enhancements while preserving the
-same command-line interface and normal download behavior.
+MUDL Experimental includes experimental compatibility enhancements while
+preserving the same command-line interface and normal download behavior.
 
 `-d` and `-o` follow aria2-style output rules: `-d` selects the output directory, and `-o` selects the output filename only. Use `-d "D:\Downloads" -o file.zip` instead of passing a full path to `-o`.
 

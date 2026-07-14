@@ -132,10 +132,10 @@ retry_request:
             if (oss_ticket_refresh(ctx->ticket, ticket_generation,
                                    refresh_error, sizeof(refresh_error)) == 0) {
                 ticket_refreshes++;
-                trace("Worker %d: Plus URL refreshed, retrying range", tid);
+                trace("Worker %d: Experimental URL refreshed, retrying range", tid);
                 goto retry_request;
             }
-            warn("Worker %d: Plus URL refresh failed - %s", tid,
+            warn("Worker %d: Experimental URL refresh failed - %s", tid,
                  refresh_error);
         }
 

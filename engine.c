@@ -67,7 +67,7 @@ int engine_run(const options_t* options) {
                         opts.user_agent, opts.referer,
                         (const char**)opts.extra_headers, opts.extra_count,
                         &opts.proxy, ticket_error, sizeof(ticket_error)) != 0) {
-        fprintf(stderr, "Error: Plus compatibility initialization failed: %s\n",
+        fprintf(stderr, "Error: Experimental compatibility initialization failed: %s\n",
                 ticket_error);
         oss_ticket_destroy(&ticket);
         http_global_cleanup();
@@ -75,7 +75,7 @@ int engine_run(const options_t* options) {
     }
     if (ticket.enabled) {
         oss_ticket_snapshot(&ticket, opts.url, sizeof(opts.url), NULL);
-        infof(&opts, "MUDL Plus compatibility enabled\n");
+        infof(&opts, "MUDL Experimental compatibility enabled\n");
     }
 
     char outpath[MAX_PATH * 2];
@@ -166,7 +166,7 @@ probe_connect:
         http_close(&probe);
         if (oss_ticket_refresh(&ticket, probe_ticket_generation,
                                ticket_error, sizeof(ticket_error)) != 0) {
-            fprintf(stderr, "Error: Plus URL refresh failed: %s\n",
+            fprintf(stderr, "Error: Experimental URL refresh failed: %s\n",
                     ticket_error);
             oss_ticket_destroy(&ticket);
             http_global_cleanup();
@@ -348,7 +348,7 @@ send_single_request:
         http_close(&cli);
         if (oss_ticket_refresh(ticket, ticket_generation,
                                refresh_error, sizeof(refresh_error)) != 0) {
-            fprintf(stderr, "Error: Plus URL refresh failed: %s\n",
+            fprintf(stderr, "Error: Experimental URL refresh failed: %s\n",
                     refresh_error);
             file_close(&f);
             return 2;
