@@ -54,6 +54,8 @@ static void test_oppo_download_check(void) {
         "https://component-ota-cn.allawnos.com/downloadCheck?c=1"));
     assert(url_is_oppo_download_check(
         "HTTPS://A.ALLAWNOS.COM/downloadcheck?x=1"));
+    assert(url_is_oppo_download_check(
+        "https://component-ota-cn.allawntech.com/downloadCheck?c=1"));
     assert(!url_is_oppo_download_check(
         "http://component-ota-cn.allawnos.com/downloadCheck?c=1"));
     assert(!url_is_oppo_download_check(
@@ -61,7 +63,7 @@ static void test_oppo_download_check(void) {
     assert(!url_is_oppo_download_check(
         "https://evilallawnos.com/downloadCheck?c=1"));
     assert(!url_is_oppo_download_check(
-        "https://component-ota-cn.allawntech.com/downloadCheck?c=1"));
+        "https://evilallawntech.com/downloadCheck?c=1"));
     assert(!url_is_oppo_download_check(
         "https://component-ota-cn.allawnos.com/downloadCheck"));
     assert(!url_is_oppo_download_check(
