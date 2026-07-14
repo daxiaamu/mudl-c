@@ -38,6 +38,7 @@ int segmgr_init(segment_manager_t* mgr, int64_t file_size, int max_connections) 
     memset(mgr, 0, sizeof(segment_manager_t));
     mgr->file_size = file_size;
     mgr->max_retries = 5;
+    mgr->worker_limit = max_connections;
 
     /* Determine segment count and size */
     int seg_count;
@@ -97,6 +98,11 @@ void segmgr_destroy(segment_manager_t* mgr) {
 segment_t* segmgr_acquire_pending(segment_manager_t* mgr) {
     EnterCriticalSection(&mgr->lock);
 
+    if (mgr->worker_limit > 0 && mgr->active_count >= mgr->worker_limit) {
+        LeaveCriticalSection(&mgr->lock);
+        return NULL;
+    }
+
     while (mgr->pending_head <= mgr->pending_tail) {
         int idx = mgr->pending_queue[mgr->pending_head++];
         segment_t* seg = &mgr->segments[idx];
@@ -111,6 +117,57 @@ segment_t* segmgr_acquire_pending(segment_manager_t* mgr) {
 
     LeaveCriticalSection(&mgr->lock);
     return NULL;
+}
+
+void segmgr_set_worker_limit(segment_manager_t* mgr, int worker_limit) {
+    if (worker_limit < 1) worker_limit = 1;
+    EnterCriticalSection(&mgr->lock);
+    mgr->worker_limit = worker_limit;
+    LeaveCriticalSection(&mgr->lock);
+    WakeAllConditionVariable(&mgr->cv_new_work);
+}
+
+int segmgr_compact_verified(segment_manager_t* mgr) {
+    EnterCriticalSection(&mgr->lock);
+
+    int old_count = mgr->segment_count;
+    int write = 0;
+    for (int read = 0; read < old_count; read++) {
+        segment_t current = mgr->segments[read];
+        if (write > 0 && mgr->segments[write - 1].state == SEG_COMPLETE) {
+            segment_t* previous = &mgr->segments[write - 1];
+            previous->crc32 = crc32_combine(previous->crc32, current.crc32,
+                                            current.downloaded);
+            previous->end_offset = current.end_offset;
+            previous->downloaded += current.downloaded;
+            if (current.state != SEG_COMPLETE) {
+                previous->state = SEG_PENDING;
+                previous->retry_count = current.retry_count;
+            }
+            previous->socket_fd = -1;
+            previous->speed_bps = 0;
+            previous->last_activity_ms = 0;
+        } else {
+            mgr->segments[write++] = current;
+        }
+    }
+
+    mgr->segment_count = write;
+    mgr->active_count = 0;
+    mgr->complete_count = 0;
+    mgr->pending_head = 0;
+    mgr->pending_tail = -1;
+    for (int i = 0; i < write; i++) {
+        segment_t* segment = &mgr->segments[i];
+        segment->index = i;
+        if (segment->state == SEG_COMPLETE)
+            mgr->complete_count++;
+        else
+            mgr->pending_queue[++mgr->pending_tail] = i;
+    }
+
+    LeaveCriticalSection(&mgr->lock);
+    return old_count - write;
 }
 
 int segmgr_expand_pending(segment_manager_t* mgr, int target_count) {
