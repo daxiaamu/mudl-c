@@ -4,6 +4,28 @@
 #include <stdlib.h>
 #include <string.h>
 
+bool url_is_oppo_download_check(const char* url) {
+    if (!url) return false;
+    const char* scheme = strstr(url, "://");
+    if (!scheme || (scheme - url) != 5 || _strnicmp(url, "https", 5) != 0)
+        return false;
+
+    const char* host = scheme + 3;
+    const char* path = strchr(host, '/');
+    if (!path) return false;
+    const char* host_end = path;
+    const char* port = memchr(host, ':', (size_t)(host_end - host));
+    if (port) host_end = port;
+
+    static const char suffix[] = ".allawnos.com";
+    size_t host_len = (size_t)(host_end - host);
+    size_t suffix_len = sizeof(suffix) - 1;
+    if (host_len <= suffix_len ||
+        _strnicmp(host + host_len - suffix_len, suffix, suffix_len) != 0)
+        return false;
+    return _strnicmp(path, "/downloadCheck?", 15) == 0;
+}
+
 static void trim_copy(const char* src, size_t len, char* out, int out_n) {
     while (len > 0 && (*src == ' ' || *src == '\t')) {
         src++;
@@ -182,4 +204,3 @@ int http_parse_url(const char* url, char* scheme, int scheme_n,
     }
     return 0;
 }
-

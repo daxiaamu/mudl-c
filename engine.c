@@ -7,6 +7,7 @@
 #include "thread_pool.h"
 #include "persist.h"
 #include "checksum.h"
+#include "oss_ticket.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,11 +28,13 @@ void engine_interrupt(void) {
 
 /* Single-thread fallback */
 static int download_single(options_t* opts, const char* outpath,
-                           char* path, int64_t file_size);
+                           char* path, int64_t file_size,
+                           oss_ticket_t* ticket);
 
 /* Multi-thread download */
 static int download_multi(options_t* opts, const char* outpath,
-                          const char* path, int64_t total_size);
+                          const char* path, int64_t total_size,
+                          oss_ticket_t* ticket);
 
 
 /* Speed tracker */
@@ -58,10 +61,28 @@ int engine_run(const options_t* options) {
     options_t opts = *options;
     http_global_init();
 
+    oss_ticket_t ticket;
+    char ticket_error[512] = {0};
+    if (oss_ticket_init(&ticket, opts.url, opts.timeout_sec,
+                        opts.user_agent, opts.referer,
+                        (const char**)opts.extra_headers, opts.extra_count,
+                        &opts.proxy, ticket_error, sizeof(ticket_error)) != 0) {
+        fprintf(stderr, "Error: failed to resolve OPPO downloadCheck URL: %s\n",
+                ticket_error);
+        oss_ticket_destroy(&ticket);
+        http_global_cleanup();
+        return 1;
+    }
+    if (ticket.enabled) {
+        oss_ticket_snapshot(&ticket, opts.url, sizeof(opts.url), NULL);
+        infof(&opts, "OPPO OS 16 downloadCheck ticket resolved\n");
+    }
+
     char outpath[MAX_PATH * 2];
     if (file_resolve_output_path(opts.url, opts.dir, opts.output,
                                  outpath, sizeof(outpath)) != 0) {
         fprintf(stderr, "Error: -o/--output expects a filename only. Use -d/--dir for the output directory.\n");
+        oss_ticket_destroy(&ticket);
         http_global_cleanup();
         return 1;
     }
@@ -84,20 +105,31 @@ int engine_run(const options_t* options) {
     http_response_t probe_resp;
     int64_t file_size = 0;
     bool multi_supported = false;
+    int r;
+    int redirect_count;
+    int probe_ticket_refreshes = 0;
+    unsigned long probe_ticket_generation = 0;
+
+probe_connect:
+    oss_ticket_snapshot(&ticket, opts.url, sizeof(opts.url),
+                        &probe_ticket_generation);
+    http_parse_url(opts.url, scheme, sizeof(scheme),
+                   host, sizeof(host), &port, path, sizeof(path));
 
     if (http_connect(&probe, opts.url, opts.timeout_sec, &opts.proxy) != 0) {
         fprintf(stderr, "Error: %s\n", probe.last_error);
+        oss_ticket_destroy(&ticket);
         http_global_cleanup();
         return 1;
     }
 
-    int r = http_request(&probe, HTTP_GET, path, "0-", NULL,
-                         opts.user_agent, opts.referer,
-                         (const char**)opts.extra_headers, opts.extra_count,
-                         &probe_resp);
+    r = http_request(&probe, HTTP_GET, path, "0-", NULL,
+                     opts.user_agent, opts.referer,
+                     (const char**)opts.extra_headers, opts.extra_count,
+                     &probe_resp);
 
     /* Follow redirects (OSS signed URLs often redirect to CDN) */
-    int redirect_count = 0;
+    redirect_count = 0;
     while (r == 0 && (probe_resp.status_code == 301 ||
            probe_resp.status_code == 302 ||
            probe_resp.status_code == 307 ||
@@ -110,6 +142,7 @@ int engine_run(const options_t* options) {
         snprintf(opts.url, sizeof(opts.url), "%s", probe_resp.location);
         if (http_connect(&probe, opts.url, opts.timeout_sec, &opts.proxy) != 0) {
             fprintf(stderr, "Redirect error: %s\n", probe.last_error);
+            oss_ticket_destroy(&ticket);
             http_global_cleanup();
             return 1;
         }
@@ -127,9 +160,26 @@ int engine_run(const options_t* options) {
                          &probe_resp);
     }
 
+    if (r == 0 && ticket.enabled &&
+        (probe_resp.status_code == 401 || probe_resp.status_code == 403 ||
+         probe_resp.status_code == 416) && probe_ticket_refreshes < 4) {
+        http_close(&probe);
+        if (oss_ticket_refresh(&ticket, probe_ticket_generation,
+                               ticket_error, sizeof(ticket_error)) != 0) {
+            fprintf(stderr, "Error: OSS ticket refresh failed: %s\n",
+                    ticket_error);
+            oss_ticket_destroy(&ticket);
+            http_global_cleanup();
+            return 1;
+        }
+        probe_ticket_refreshes++;
+        goto probe_connect;
+    }
+
     if (r != 0) {
         fprintf(stderr, "Error: %s\n", probe.last_error);
         http_close(&probe);
+        oss_ticket_destroy(&ticket);
         http_global_cleanup();
         return 1;
     }
@@ -146,21 +196,23 @@ int engine_run(const options_t* options) {
     } else if (probe_resp.status_code != 200) {
         fprintf(stderr, "Error: HTTP status %d\n", probe_resp.status_code);
         http_close(&probe);
+        oss_ticket_destroy(&ticket);
         http_global_cleanup();
         return 1;
     }
     response_validator(&probe_resp, opts.resource_validator,
                        sizeof(opts.resource_validator));
     http_close(&probe);
+    oss_ticket_set_current(&ticket, opts.url);
 
     /* The segmented engine also supports one worker. Keeping Range downloads
        on this path preserves every verified segment when concurrency changes. */
     if (multi_supported) {
-        exit_code = download_multi(&opts, outpath, path, file_size);
+        exit_code = download_multi(&opts, outpath, path, file_size, &ticket);
     } else {
         if (file_size > 0)
             infof(&opts, "Using single-thread (connections=%d)\n\n", opts.connections);
-        exit_code = download_single(&opts, outpath, path, file_size);
+        exit_code = download_single(&opts, outpath, path, file_size, &ticket);
     }
 
     if (exit_code == 0 && opts.checksum[0]) {
@@ -183,13 +235,15 @@ int engine_run(const options_t* options) {
         }
     }
 
+    oss_ticket_destroy(&ticket);
     http_global_cleanup();
     return exit_code;
 }
 
 /* ===== Single-thread fallback ===== */
 static int download_single(options_t* opts, const char* outpath,
-                           char* path, int64_t file_size) {
+                           char* path, int64_t file_size,
+                           oss_ticket_t* ticket) {
     /* Check for resume (segments.bin) */
     char segpath[MAX_PATH * 2];
     persist_path(outpath, segpath, sizeof(segpath));
@@ -217,6 +271,9 @@ static int download_single(options_t* opts, const char* outpath,
     infof(opts, "Method:  single-thread%s\n\n",
            resumed ? " (resume)" : "");
     http_client_t cli;
+    unsigned long ticket_generation = 0;
+    oss_ticket_snapshot(ticket, opts->url, sizeof(opts->url),
+                        &ticket_generation);
     if (http_connect(&cli, opts->url, opts->timeout_sec, &opts->proxy) != 0) {
         fprintf(stderr, "Error: %s\n", cli.last_error);
         return 2;
@@ -245,6 +302,9 @@ static int download_single(options_t* opts, const char* outpath,
        If not, it returns 200 with full content. */
     char range_start[32];
     snprintf(range_start, sizeof(range_start), "%lld", (long long)resume_pos);
+    int ticket_refreshes = 0;
+send_single_request:
+    ;
     int r = http_request(&cli, HTTP_GET, path,
                          resume_pos > 0 ? range_start : "0-", NULL,
                          opts->user_agent, opts->referer,
@@ -280,6 +340,37 @@ static int download_single(options_t* opts, const char* outpath,
                          (const char**)opts->extra_headers, opts->extra_count,
                          &get_resp);
     }
+
+    if (r == 0 && ticket->enabled &&
+        (get_resp.status_code == 401 || get_resp.status_code == 403 ||
+         get_resp.status_code == 416) && ticket_refreshes < 4) {
+        char refresh_error[512] = {0};
+        http_close(&cli);
+        if (oss_ticket_refresh(ticket, ticket_generation,
+                               refresh_error, sizeof(refresh_error)) != 0) {
+            fprintf(stderr, "Error: OSS ticket refresh failed: %s\n",
+                    refresh_error);
+            file_close(&f);
+            return 2;
+        }
+        ticket_refreshes++;
+        oss_ticket_snapshot(ticket, opts->url, sizeof(opts->url),
+                            &ticket_generation);
+        char scheme[16], host[256], path_new[HTTP_MAX_PATH];
+        int port;
+        http_parse_url(opts->url, scheme, sizeof(scheme), host, sizeof(host),
+                       &port, path_new, sizeof(path_new));
+        snprintf(path, HTTP_MAX_PATH, "%s", path_new);
+        if (http_connect(&cli, opts->url, opts->timeout_sec, &opts->proxy) != 0) {
+            fprintf(stderr, "Error: %s\n", cli.last_error);
+            file_close(&f);
+            return 2;
+        }
+        redirect_count = 0;
+        goto send_single_request;
+    }
+
+    oss_ticket_set_current(ticket, opts->url);
 
     if (r != 0) {
         fprintf(stderr, "Error: %s\n", cli.last_error);
@@ -454,7 +545,8 @@ static int download_single(options_t* opts, const char* outpath,
 
 /* ===== Multi-thread download ===== */
 static int download_multi(options_t* opts, const char* outpath,
-                          const char* path, int64_t total_size) {
+                          const char* path, int64_t total_size,
+                          oss_ticket_t* ticket) {
     int conn = opts->connections;
     if (conn == 1)
         infof(opts, "Method:  segmented (1 connection)\n\n");
@@ -540,6 +632,7 @@ static int download_multi(options_t* opts, const char* outpath,
     base_ctx.output_file = &output_file;
     base_ctx.interrupted = &g_interrupted;
     base_ctx.global_downloaded = &st.downloaded;
+    base_ctx.ticket = ticket;
 
     progress_t prog;
     progress_init(&prog, opts->progress_mode, total_size,

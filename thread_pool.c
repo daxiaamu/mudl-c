@@ -84,8 +84,19 @@ DWORD WINAPI worker_thread_func(LPVOID param) {
         snprintf(range_end, sizeof(range_end), "%lld",
                  (long long)seg->end_offset);
 
+        int ticket_refreshes = 0;
+retry_request:
+        ;
+        char request_url[HTTP_MAX_URL];
+        unsigned long ticket_generation = 0;
+        if (ctx->ticket)
+            oss_ticket_snapshot(ctx->ticket, request_url, sizeof(request_url),
+                                &ticket_generation);
+        else
+            snprintf(request_url, sizeof(request_url), "%s", ctx->url);
+
         http_client_t http;
-        if (http_connect(&http, ctx->url, ctx->timeout_sec, ctx->proxy) != 0) {
+        if (http_connect(&http, request_url, ctx->timeout_sec, ctx->proxy) != 0) {
             warn("Worker %d: connect failed - %s", tid, http.last_error);
             segmgr_error(mgr, seg);
             http_close(&http);
@@ -94,7 +105,7 @@ DWORD WINAPI worker_thread_func(LPVOID param) {
 
         char scheme[16], host[256], path[HTTP_MAX_PATH];
         int port;
-        http_parse_url(ctx->url, scheme, sizeof(scheme),
+        http_parse_url(request_url, scheme, sizeof(scheme),
                        host, sizeof(host), &port, path, sizeof(path));
 
         http_response_t resp;
@@ -112,7 +123,22 @@ DWORD WINAPI worker_thread_func(LPVOID param) {
             http_close(&http);
             continue;
         }
-        
+
+        if (ctx->ticket && ctx->ticket->enabled &&
+            (resp.status_code == 401 || resp.status_code == 403 ||
+             resp.status_code == 416) && ticket_refreshes < 4) {
+            char refresh_error[512] = {0};
+            http_close(&http);
+            if (oss_ticket_refresh(ctx->ticket, ticket_generation,
+                                   refresh_error, sizeof(refresh_error)) == 0) {
+                ticket_refreshes++;
+                trace("Worker %d: OSS ticket refreshed, retrying range", tid);
+                goto retry_request;
+            }
+            warn("Worker %d: OSS ticket refresh failed - %s", tid,
+                 refresh_error);
+        }
+
         /* If server returns non-206, this segment request failed */
         if (resp.status_code != 206) {
             trace("Worker %d: non-206 response, suspending segment", tid);

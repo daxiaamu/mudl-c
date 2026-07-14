@@ -8,6 +8,7 @@
 #include "segment.h"
 #include "http.h"
 #include "file_io.h"
+#include "oss_ticket.h"
 
 /* Worker context passed to each thread */
 typedef struct {
@@ -24,6 +25,7 @@ typedef struct {
     file_t*      output_file;
     volatile bool* interrupted;
     int64_t*     global_downloaded;
+    oss_ticket_t* ticket;
 } worker_ctx_t;
 
 /* Start N worker threads. Returns array of thread handles. */

@@ -49,11 +49,31 @@ static void test_proxy_selection(void) {
     assert(url_select_proxy(&config, "https", "api.internal.example") == NULL);
 }
 
+static void test_oppo_download_check(void) {
+    assert(url_is_oppo_download_check(
+        "https://component-ota-cn.allawnos.com/downloadCheck?c=1"));
+    assert(url_is_oppo_download_check(
+        "HTTPS://A.ALLAWNOS.COM/downloadcheck?x=1"));
+    assert(!url_is_oppo_download_check(
+        "http://component-ota-cn.allawnos.com/downloadCheck?c=1"));
+    assert(!url_is_oppo_download_check(
+        "https://allawnos.com/downloadCheck?c=1"));
+    assert(!url_is_oppo_download_check(
+        "https://evilallawnos.com/downloadCheck?c=1"));
+    assert(!url_is_oppo_download_check(
+        "https://component-ota-cn.allawntech.com/downloadCheck?c=1"));
+    assert(!url_is_oppo_download_check(
+        "https://component-ota-cn.allawnos.com/downloadCheck"));
+    assert(!url_is_oppo_download_check(
+        "https://component-ota-cn.allawnos.com/other?c=1"));
+}
+
 int main(void) {
     test_url_parse();
     test_proxy_parse();
     test_no_proxy();
     test_proxy_selection();
+    test_oppo_download_check();
     puts("URL and proxy unit tests passed");
     return 0;
 }
