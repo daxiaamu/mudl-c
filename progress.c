@@ -112,7 +112,7 @@ void progress_update(progress_t* p, int64_t downloaded,
                      fmt_bytes(p->total));
     pos += _snprintf(buf + pos, sizeof(buf) - pos, "%s ",
                      fmt_speed(speed));
-    pos += _snprintf(buf + pos, sizeof(buf) - pos, "T:%d ", active);
+    pos += _snprintf(buf + pos, sizeof(buf) - pos, "T:%d/%d ", active, total);
 
     if (eta_sec > 0) {
         int h = eta_sec / 3600;

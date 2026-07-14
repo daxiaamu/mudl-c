@@ -129,6 +129,49 @@ uint32_t crc32_update(uint32_t crc, const void* data, int len) {
     return ~crc;
 }
 
+static uint32_t gf2_matrix_times(const uint32_t* matrix, uint32_t vector) {
+    uint32_t sum = 0;
+    while (vector) {
+        if (vector & 1U) sum ^= *matrix;
+        vector >>= 1;
+        matrix++;
+    }
+    return sum;
+}
+
+static void gf2_matrix_square(uint32_t* square, const uint32_t* matrix) {
+    for (int i = 0; i < 32; i++)
+        square[i] = gf2_matrix_times(matrix, matrix[i]);
+}
+
+uint32_t crc32_combine(uint32_t crc1, uint32_t crc2, int64_t len2) {
+    if (len2 <= 0) return crc1;
+
+    uint32_t even[32];
+    uint32_t odd[32];
+    odd[0] = 0xEDB88320U;
+    uint32_t row = 1;
+    for (int i = 1; i < 32; i++) {
+        odd[i] = row;
+        row <<= 1;
+    }
+
+    gf2_matrix_square(even, odd);
+    gf2_matrix_square(odd, even);
+    do {
+        gf2_matrix_square(even, odd);
+        if (len2 & 1) crc1 = gf2_matrix_times(even, crc1);
+        len2 >>= 1;
+        if (len2 == 0) break;
+
+        gf2_matrix_square(odd, even);
+        if (len2 & 1) crc1 = gf2_matrix_times(odd, crc1);
+        len2 >>= 1;
+    } while (len2 != 0);
+
+    return crc1 ^ crc2;
+}
+
 bool console_has_color(void) {
     static int cached = -1;
     if (cached == -1) {

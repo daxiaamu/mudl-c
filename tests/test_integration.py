@@ -217,7 +217,8 @@ def main():
             result = subprocess.run(command, capture_output=True, timeout=15)
             output = result.stdout.decode(errors="replace")
             assert result.returncode == 0, result.stderr.decode(errors="replace")
-            assert "Resuming from segments.bin (2 segments, 1 pending)" in output, output
+            assert "Resume ranges compacted: 2 -> 1" in output, output
+            assert "Resuming from segments.bin (1 range, 1 pending)" in output, output
             assert "Method:  segmented (1 connection)" in output, output
             assert "100.0%" in output, output
             assert hashlib.sha256(lowered_file.read_bytes()).digest() == \

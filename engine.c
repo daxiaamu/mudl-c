@@ -571,8 +571,15 @@ static int download_multi(options_t* opts, const char* outpath,
             memset(&segmgr, 0, sizeof(segmgr));
             if (persist_load(segpath, &segmgr, total_size, NULL,
                              opts->resource_validator) == 0) {
-                infof(opts, "Resuming from segments.bin (%d segments, %lld pending)\n",
+                int old_ranges = segmgr.segment_count;
+                int compacted = segmgr_compact_verified(&segmgr);
+                if (compacted > 0) {
+                    infof(opts, "Resume ranges compacted: %d -> %d\n",
+                          old_ranges, segmgr.segment_count);
+                }
+                infof(opts, "Resuming from segments.bin (%d range%s, %lld pending)\n",
                        segmgr.segment_count,
+                       segmgr.segment_count == 1 ? "" : "s",
                        (long long)(segmgr.segment_count - segmgr.complete_count));
                 resumed = true;
             } else {
@@ -587,7 +594,7 @@ static int download_multi(options_t* opts, const char* outpath,
             fprintf(stderr, "Error: failed to init segment manager\n");
             return 1;
         }
-        infof(opts, "Segments: %d\n", segmgr.segment_count);
+        infof(opts, "Ranges: %d\n", segmgr.segment_count);
     } else {
         int old_count = segmgr.segment_count;
         int pending = segmgr_expand_pending(&segmgr, conn);
@@ -597,11 +604,12 @@ static int download_multi(options_t* opts, const char* outpath,
             return 1;
         }
         if (segmgr.segment_count > old_count) {
-            infof(opts, "Resume segments expanded: %d -> %d for %d connections\n",
+            infof(opts, "Resume ranges expanded: %d -> %d for %d connections\n",
                   old_count, segmgr.segment_count, conn);
         }
     }
 
+    segmgr_set_worker_limit(&segmgr, conn);
     segmgr.max_retries = opts->max_retries;
 
     /* Open output file (must exist for resume) */

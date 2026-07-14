@@ -34,6 +34,7 @@ typedef struct {
     int        segment_count;
     int        total_size;      /* sum of all segment byte sizes */
     int        active_count;
+    int        worker_limit;    /* hard cap for concurrent acquired segments */
     int        complete_count;
     int        max_retries;
     bool       fatal_error;
@@ -62,6 +63,12 @@ segment_t* segmgr_acquire_pending(segment_manager_t* mgr);
 
 /* Split pending resume work before workers start, up to target_count. */
 int segmgr_expand_pending(segment_manager_t* mgr, int target_count);
+
+/* Set the maximum number of segments that may be acquired concurrently. */
+void segmgr_set_worker_limit(segment_manager_t* mgr, int worker_limit);
+
+/* Merge verified completed prefixes before repartitioning resumed work. */
+int segmgr_compact_verified(segment_manager_t* mgr);
 
 /* Mark segment as complete */
 void segmgr_complete(segment_manager_t* mgr, segment_t* seg);
