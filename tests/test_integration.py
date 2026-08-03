@@ -11,6 +11,7 @@ import zlib
 DATA = bytes(range(256)) * 8192
 FLAKY_DATA = DATA * 17
 EXPAND_DATA = DATA * 8
+DIFFERENT_DATA = b"X" + DATA[1:]
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -46,6 +47,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
         count = self._count()
         if self.path == "/range":
             self._range('"stable"')
+        elif self.path in ("/mirror-a", "/mirror-b"):
+            self._range('"mirror-a"' if self.path == "/mirror-a" else '"mirror-b"')
+        elif self.path == "/mirror-expiring":
+            if count <= 2:
+                self._range('"expiring"')
+            else:
+                self.send_response(403)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+        elif self.path == "/mirror-different":
+            self._range('"different"', data=DIFFERENT_DATA)
         elif self.path == "/changed":
             self._range('"probe"' if count == 1 else '"changed"')
         elif self.path == "/wrong-total":
@@ -113,6 +125,66 @@ def main():
             result = run(mudl, temp, base + "/range", "range.bin", "-c", "2")
             assert result.returncode == 0, result.stderr.decode(errors="replace")
             assert hashlib.sha256((temp / "range.bin").read_bytes()).digest() == expected
+
+            command = [str(mudl), "-d", str(temp), "-o", "mirrors.bin",
+                       "-c", "8", "--progress", "none",
+                       base + "/mirror-a", base + "/mirror-b"]
+            result = subprocess.run(command, capture_output=True, timeout=20)
+            assert result.returncode == 0, result.stderr.decode(errors="replace")
+            assert Handler.counts.get("/mirror-a", 0) > 2
+            assert Handler.counts.get("/mirror-b", 0) > 2
+            assert hashlib.sha256((temp / "mirrors.bin").read_bytes()).digest() == expected
+
+            mirror_resume = temp / "mirror-resume.bin"
+            mirror_partial = len(DATA) // 2
+            with mirror_resume.open("wb") as stream:
+                stream.write(DATA[:mirror_partial])
+                stream.truncate(len(DATA))
+            first_crc = zlib.crc32(DATA[:65536]) & 0xFFFFFFFF
+            last_crc = zlib.crc32(DATA[-65536:]) & 0xFFFFFFFF
+            mirror_validator = (
+                f"mirrors-v1:{len(DATA)}:{first_crc:08x}:65536:"
+                f"{last_crc:08x}:65536").encode("ascii")
+            mirror_header = struct.pack(
+                "<IIqIIIQ256s", 0x4D55444D, 3, len(DATA), 1, 1, 0, 0,
+                mirror_validator.ljust(256, b"\0"))
+            mirror_segment = struct.pack(
+                "<IqqqIII", 0, 0, len(DATA) - 1, mirror_partial, 1, 0,
+                zlib.crc32(DATA[:mirror_partial]) & 0xFFFFFFFF)
+            (temp / "mirror-resume.bin.segments").write_bytes(
+                mirror_header + mirror_segment)
+            command = [str(mudl), "-d", str(temp), "-o", "mirror-resume.bin",
+                       "-c", "4", "--progress", "line",
+                       base + "/mirror-a", base + "/mirror-b"]
+            result = subprocess.run(command, capture_output=True, timeout=20)
+            output = result.stdout.decode(errors="replace")
+            assert result.returncode == 0, result.stderr.decode(errors="replace")
+            assert "Resuming from segments.bin" in output, output
+            assert hashlib.sha256(mirror_resume.read_bytes()).digest() == expected
+
+            command = [str(mudl), "-d", str(temp), "-o", "failover.bin",
+                       "-c", "8", "--retries", "0", "--progress", "none",
+                       base + "/mirror-expiring", base + "/mirror-b"]
+            result = subprocess.run(command, capture_output=True, timeout=20)
+            assert result.returncode == 0, result.stderr.decode(errors="replace")
+            assert hashlib.sha256((temp / "failover.bin").read_bytes()).digest() == expected
+
+            command = [str(mudl), "-d", str(temp), "-o", "initial-failover.bin",
+                       "-c", "4", "--retries", "0", "--progress", "none",
+                       base + "/missing", base + "/mirror-b"]
+            result = subprocess.run(command, capture_output=True, timeout=20)
+            assert result.returncode == 0, result.stderr.decode(errors="replace")
+            assert hashlib.sha256(
+                (temp / "initial-failover.bin").read_bytes()).digest() == expected
+
+            command = [str(mudl), "-d", str(temp), "-o", "mismatch.bin",
+                       "-c", "4", "--progress", "none",
+                       base + "/mirror-a", base + "/mirror-different"]
+            result = subprocess.run(command, capture_output=True, timeout=20)
+            output = result.stdout.decode(errors="replace")
+            assert result.returncode == 0, result.stderr.decode(errors="replace")
+            assert "Source 2 rejected" in output, output
+            assert hashlib.sha256((temp / "mismatch.bin").read_bytes()).digest() == expected
 
             (temp / "chunked.bin").write_bytes(DATA + b"stale trailing bytes")
             result = run(mudl, temp, base + "/chunked", "chunked.bin", "-c", "1")

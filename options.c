@@ -6,6 +6,7 @@
 #include <stdio.h>
 
 static void set_proxy_option(proxy_endpoint_t* dst, const char* value);
+static void add_url_option(options_t* opts, const char* value);
 static void parse_embedded_args(options_t* opts, char* arg_tail);
 static void split_embedded_args(options_t* opts, char* value);
 static char* trim_token_quotes(char* s);
@@ -89,8 +90,7 @@ void options_parse(options_t* opts, int argc, char** argv) {
             die("Unknown option: %s. Use -h for help.", argv[i]);
         }
         else {
-            if (opts->url[0] == 0)
-                strncpy(opts->url, argv[i], sizeof(opts->url) - 1);
+            add_url_option(opts, argv[i]);
         }
     }
 }
@@ -98,6 +98,15 @@ static void set_proxy_option(proxy_endpoint_t* dst, const char* value) {
     char err[256] = {0};
     if (http_proxy_parse(value, dst, err, sizeof(err)) != 0)
         die("%s", err);
+}
+
+static void add_url_option(options_t* opts, const char* value) {
+    if (opts->url_count >= MAX_DOWNLOAD_SOURCES)
+        die("Too many URLs (max %d)", MAX_DOWNLOAD_SOURCES);
+    snprintf(opts->urls[opts->url_count], HTTP_MAX_URL, "%s", value);
+    if (opts->url_count == 0)
+        snprintf(opts->url, sizeof(opts->url), "%s", value);
+    opts->url_count++;
 }
 
 static char* trim_token_quotes(char* s) {
@@ -241,9 +250,8 @@ static void parse_embedded_args(options_t* opts, char* arg_tail) {
             opts->proxy.no_proxy[sizeof(opts->proxy.no_proxy) - 1] = 0;
         } else if (strcmp(tok, "-q") == 0 || strcmp(tok, "--quiet") == 0) {
             opts->quiet = true;
-        } else if (tok[0] != '-' && opts->url[0] == 0) {
-            strncpy(opts->url, tok, sizeof(opts->url) - 1);
-            opts->url[sizeof(opts->url) - 1] = 0;
+        } else if (tok[0] != '-') {
+            add_url_option(opts, tok);
         }
     }
 }
@@ -262,7 +270,7 @@ static void split_embedded_args(options_t* opts, char* value) {
 void options_print_help(void) {
     printf("大侠阿木：daxiaamu.com\n");
     printf("MUDL - Multi-threaded Universal Downloader\n");
-    printf("Usage: mudl [options] <URL>\n\n");
+    printf("Usage: mudl [options] <URL> [URL...]\n\n");
     printf("Options:\n");
     printf("  -o,  --output <FILE>      Output filename\n");
     printf("  -d,  --dir <DIR>          Output directory\n");
@@ -285,6 +293,7 @@ void options_print_help(void) {
     printf("Examples:\n");
     printf("  mudl https://example.com/file.zip\n");
     printf("  mudl -c 8 https://example.com/large.iso\n");
+    printf("  mudl https://host/file.zip https://mirror/file.zip\n");
     printf("  mudl -q -p json https://example.com/file.bin\n");
 }
 void options_print_version(void) {

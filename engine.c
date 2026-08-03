@@ -31,7 +31,10 @@ static int download_single(options_t* opts, const char* outpath,
 
 /* Multi-thread download */
 static int download_multi(options_t* opts, const char* outpath,
-                          const char* path, int64_t total_size);
+                          int64_t total_size,
+                          download_source_t* sources, int source_count);
+static int prepare_sources(options_t* opts, download_source_t* sources,
+                           int* source_count, int64_t* file_size);
 
 
 /* Speed tracker */
@@ -54,6 +57,48 @@ typedef struct {
 static void speed_init(speed_tracker_t* st, int64_t initial_downloaded);
 static void speed_tick(speed_tracker_t* st, int64_t total_downloaded);
 
+static int prepare_sources(options_t* opts, download_source_t* sources,
+                           int* source_count, int64_t* file_size) {
+    *source_count = 0;
+    *file_size = 0;
+
+    for (int i = 0; i < opts->url_count; i++) {
+        download_source_t candidate;
+        char err[512] = {0};
+        infof(opts, "Checking source %d/%d: %s\n",
+              i + 1, opts->url_count, opts->urls[i]);
+        if (source_probe(&candidate, opts->urls[i], opts->timeout_sec,
+                         opts->user_agent, opts->referer,
+                         (const char**)opts->extra_headers, opts->extra_count,
+                         &opts->proxy, err, sizeof(err)) != 0) {
+            infof(opts, "Source %d unavailable: %s\n", i + 1, err);
+            continue;
+        }
+        if (*source_count > 0 && !source_matches(&candidate, &sources[0])) {
+            infof(opts, "Source %d rejected: file size or sample fingerprint differs\n",
+                  i + 1);
+            continue;
+        }
+        sources[(*source_count)++] = candidate;
+        infof(opts, "Source %d accepted: %s\n", i + 1, candidate.url);
+    }
+
+    if (*source_count == 0) {
+        fprintf(stderr, "Error: no usable source URL\n");
+        return -1;
+    }
+
+    *file_size = sources[0].file_size;
+    snprintf(opts->url, sizeof(opts->url), "%s", sources[0].url);
+    snprintf(opts->resource_validator, sizeof(opts->resource_validator),
+             "mirrors-v1:%lld:%08x:%d:%08x:%d",
+             (long long)sources[0].file_size,
+             sources[0].first_crc32, sources[0].first_length,
+             sources[0].last_crc32, sources[0].last_length);
+    infof(opts, "Usable sources: %d/%d\n", *source_count, opts->url_count);
+    return 0;
+}
+
 int engine_run(const options_t* options) {
     options_t opts = *options;
     http_global_init();
@@ -67,6 +112,8 @@ int engine_run(const options_t* options) {
     }
 
     infof(&opts, "URL:     %s\n", opts.url);
+    if (opts.url_count > 1)
+        infof(&opts, "Sources: %d\n", opts.url_count);
     infof(&opts, "Output:  %s\n", outpath);
     infof(&opts, "Threads: %d\n\n", opts.connections);
 
@@ -80,10 +127,23 @@ int engine_run(const options_t* options) {
     infof(&opts, "Downloading directly (skipping HEAD probe)\n\n");
 
     int exit_code;
-    http_client_t probe;
-    http_response_t probe_resp;
     int64_t file_size = 0;
     bool multi_supported = false;
+    download_source_t sources[MAX_DOWNLOAD_SOURCES];
+    int source_count = 0;
+
+    if (opts.url_count > 1) {
+        if (prepare_sources(&opts, sources, &source_count, &file_size) != 0) {
+            http_global_cleanup();
+            return 1;
+        }
+        multi_supported = true;
+        snprintf(path, sizeof(path), "%s", sources[0].path);
+        infof(&opts, "Sources support Range (file size: %lld bytes)\n",
+              (long long)file_size);
+    } else {
+    http_client_t probe;
+    http_response_t probe_resp;
 
     if (http_connect(&probe, opts.url, opts.timeout_sec, &opts.proxy) != 0) {
         fprintf(stderr, "Error: %s\n", probe.last_error);
@@ -152,11 +212,20 @@ int engine_run(const options_t* options) {
     response_validator(&probe_resp, opts.resource_validator,
                        sizeof(opts.resource_validator));
     http_close(&probe);
+    memset(&sources[0], 0, sizeof(sources[0]));
+    snprintf(sources[0].url, sizeof(sources[0].url), "%s", opts.url);
+    snprintf(sources[0].path, sizeof(sources[0].path), "%s", path);
+    snprintf(sources[0].validator, sizeof(sources[0].validator), "%s",
+             opts.resource_validator);
+    sources[0].file_size = file_size;
+    source_count = 1;
+    }
 
     /* The segmented engine also supports one worker. Keeping Range downloads
        on this path preserves every verified segment when concurrency changes. */
     if (multi_supported) {
-        exit_code = download_multi(&opts, outpath, path, file_size);
+        exit_code = download_multi(&opts, outpath, file_size,
+                                   sources, source_count);
     } else {
         if (file_size > 0)
             infof(&opts, "Using single-thread (connections=%d)\n\n", opts.connections);
@@ -454,7 +523,8 @@ static int download_single(options_t* opts, const char* outpath,
 
 /* ===== Multi-thread download ===== */
 static int download_multi(options_t* opts, const char* outpath,
-                          const char* path, int64_t total_size) {
+                          int64_t total_size,
+                          download_source_t* sources, int source_count) {
     int conn = opts->connections;
     if (conn == 1)
         infof(opts, "Method:  segmented (1 connection)\n\n");
@@ -536,13 +606,15 @@ static int download_multi(options_t* opts, const char* outpath,
     /* Worker context */
     worker_ctx_t base_ctx;
     memset(&base_ctx, 0, sizeof(base_ctx));
-    base_ctx.url = opts->url;
+    volatile LONG next_source = -1;
+    base_ctx.sources = sources;
+    base_ctx.source_count = source_count;
+    base_ctx.next_source = &next_source;
     base_ctx.user_agent = opts->user_agent;
     base_ctx.referer = opts->referer;
     base_ctx.extra_headers = (const char**)opts->extra_headers;
     base_ctx.extra_count = opts->extra_count;
     base_ctx.timeout_sec = opts->timeout_sec;
-    base_ctx.resource_validator = opts->resource_validator;
     base_ctx.proxy = &opts->proxy;
     base_ctx.segmgr = &segmgr;
     base_ctx.output_file = &output_file;

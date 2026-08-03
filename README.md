@@ -15,6 +15,7 @@ Actions page.
 | Feature | Description |
 |---------|-------------|
 | Multi-thread downloads | Parallel HTTP range downloads, up to 32 connections |
+| Multiple sources | Downloads one file from up to 16 mirror URLs with automatic failover |
 | Strict resume | Validates segment CRC32 plus the remote ETag/Last-Modified identity |
 | Signed URLs | Handles long redirect URLs used by cloud/CDN signed links |
 | Native HTTPS | Uses Windows SChannel, no bundled OpenSSL |
@@ -28,6 +29,7 @@ mudl "https://example.com/file.zip"
 mudl -c 1 "https://example.com/file.zip"
 mudl -c 16 -d downloads -o output.zip "https://example.com/file.iso"
 mudl --progress line "https://example.com/file.zip"
+mudl -o file.zip "https://host/file.zip" "https://mirror/file.zip"
 ```
 
 `-d` and `-o` follow aria2-style output rules: `-d` selects the output directory, and `-o` selects the output filename only. Use `-d "D:\Downloads" -o file.zip` instead of passing a full path to `-o`.
@@ -66,7 +68,7 @@ Manual build:
 
 ```bash
 x86_64-w64-mingw32-gcc -std=c11 -O2 -Wall -Wextra -mconsole \
-  -o mudl.exe main.c options.c engine.c http.c url.c schannel.c file_io.c progress.c utils.c \
+  -o mudl.exe main.c options.c engine.c http.c url.c source.c schannel.c file_io.c progress.c utils.c \
   segment.c thread_pool.c persist.c checksum.c \
   -lws2_32 -lshlwapi -lsecur32 -lshell32 -ladvapi32
 strip mudl.exe
@@ -98,6 +100,28 @@ strip mudl.exe
 Use `-q`/`--quiet` for scripts that should hide detail logs while keeping progress visible. Use `--progress none` for fully silent downloads. Use `--progress line` for background jobs or log files. It prints periodic full lines instead of rewriting the same console line.
 
 Custom headers may contain spaces when quoted by the shell, for example `--header "X-Test: hello world"`.
+
+## Multiple Sources
+
+Like aria2, multiple URL arguments are treated as sources for one file:
+
+```bash
+mudl -c 16 -o firmware.zip \
+  "https://server.example/firmware.zip" \
+  "https://mirror.example/firmware.zip"
+```
+
+MUDL checks every source before downloading. Sources must support byte ranges
+and must have the same file size plus matching 64 KiB samples from the start
+and end of the file. The first usable URL establishes the expected identity;
+unavailable or mismatched sources are skipped. Workers
+rotate across accepted sources; if one expires, disconnects, or returns an
+invalid range, the same segment is continued from another source before its
+normal retry count is consumed.
+
+Up to 16 source URLs are accepted. This syntax does not create separate
+download tasks. For high-value files, use `--checksum` as the final
+whole-file integrity check.
 
 ## Checksum
 
@@ -147,6 +171,7 @@ main.c            Process entry, console setup, and signal forwarding
 options.c / .h    Command-line parsing, option model, and defaults
 engine.c / .h     Download probing, orchestration, and completion checks
 url.c / .h        URL, proxy, and no-proxy parsing
+source.c / .h     Mirror probing, identity sampling, and source state
 http.c / .h       HTTP request, response, and transport orchestration
 schannel.c / .h   Windows SChannel TLS handshake and encrypted I/O
 file_io.c / .h    Thread-safe file I/O and UTF-8 path handling
