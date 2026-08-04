@@ -4,12 +4,25 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <errno.h>
 
 static void set_proxy_option(proxy_endpoint_t* dst, const char* value);
 static void add_url_option(options_t* opts, const char* value);
 static void parse_embedded_args(options_t* opts, char* arg_tail);
 static void split_embedded_args(options_t* opts, char* value);
 static char* trim_token_quotes(char* s);
+static int parse_retries(const char* value);
+
+static int parse_retries(const char* value) {
+    char* end = NULL;
+    errno = 0;
+    long parsed = strtol(value, &end, 10);
+    if (!value[0] || errno == ERANGE || !end || *end != 0 ||
+        parsed < 0 || parsed > MAX_RETRIES) {
+        die("Invalid retries: %s (expected 0-%d)", value, MAX_RETRIES);
+    }
+    return (int)parsed;
+}
 
 void options_parse(options_t* opts, int argc, char** argv) {
     memset(opts, 0, sizeof(options_t));
@@ -65,8 +78,10 @@ void options_parse(options_t* opts, int argc, char** argv) {
             if (opts->timeout_sec < 1) opts->timeout_sec = 1;
         }
         else if (strcmp(argv[i], "--retries") == 0 && i+1 < argc) {
-            opts->max_retries = atoi(argv[++i]);
-            if (opts->max_retries < 0) opts->max_retries = 0;
+            opts->max_retries = parse_retries(argv[++i]);
+        }
+        else if (strncmp(argv[i], "--retries=", 10) == 0) {
+            opts->max_retries = parse_retries(argv[i] + 10);
         }
         else if (strcmp(argv[i], "--checksum") == 0 && i+1 < argc) {
             strncpy(opts->checksum, argv[++i], sizeof(opts->checksum) - 1);
@@ -217,11 +232,9 @@ static void parse_embedded_args(options_t* opts, char* arg_tail) {
             opts->timeout_sec = atoi(trim_token_quotes(tok + 10));
             if (opts->timeout_sec < 1) opts->timeout_sec = 1;
         } else if (strcmp(tok, "--retries") == 0 && i + 1 < count) {
-            opts->max_retries = atoi(trim_token_quotes(tokens[++i]));
-            if (opts->max_retries < 0) opts->max_retries = 0;
+            opts->max_retries = parse_retries(trim_token_quotes(tokens[++i]));
         } else if (strncmp(tok, "--retries=", 10) == 0) {
-            opts->max_retries = atoi(trim_token_quotes(tok + 10));
-            if (opts->max_retries < 0) opts->max_retries = 0;
+            opts->max_retries = parse_retries(trim_token_quotes(tok + 10));
         } else if (strcmp(tok, "--checksum") == 0 && i + 1 < count) {
             strncpy(opts->checksum, trim_token_quotes(tokens[++i]), sizeof(opts->checksum) - 1);
             opts->checksum[sizeof(opts->checksum) - 1] = 0;
@@ -281,7 +294,8 @@ void options_print_help(void) {
     printf("       --referer <URL>      Referer\n");
     printf("       --header <K:V>       Custom HTTP header (repeatable)\n");
     printf("       --timeout <SEC>      Timeout (default %d)\n", DEFAULT_TIMEOUT);
-    printf("       --retries <N>        Retries (default %d)\n", DEFAULT_RETRY);
+    printf("       --retries <N>        Retries after failure (default %d, max %d)\n",
+           DEFAULT_RETRY, MAX_RETRIES);
     printf("       --checksum <TYPE=DIGEST> Verify file checksum after download\n");
     printf("       --proxy <PROXY>      Alias for --all-proxy\n");
     printf("       --all-proxy <PROXY>  Proxy for all HTTP(S) downloads\n");

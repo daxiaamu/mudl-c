@@ -69,6 +69,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_response(503)
                 self.send_header("Content-Length", "0")
                 self.end_headers()
+        elif self.path in ("/single-flaky-no-retry", "/single-flaky-retry"):
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(DATA)))
+            self.send_header("ETag", '"single-flaky"')
+            self.end_headers()
+            try:
+                if count == 2:
+                    self.wfile.write(DATA[:len(DATA) // 2])
+                    self.wfile.flush()
+                    self.close_connection = True
+                else:
+                    self.wfile.write(DATA)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
         elif self.path == "/expand":
             self._range('"expand"', data=EXPAND_DATA)
         elif self.path == "/redirect-loop":
@@ -204,6 +218,26 @@ def main():
             assert result.returncode == 0, result.stderr.decode(errors="replace")
             assert hashlib.sha256((temp / "flaky.bin").read_bytes()).digest() == \
                    hashlib.sha256(FLAKY_DATA).digest()
+
+            result = run(mudl, temp, base + "/single-flaky-no-retry",
+                         "single-no-retry.bin", "--retries", "0")
+            assert result.returncode != 0, "single download retried with retries=0"
+            assert Handler.counts.get("/single-flaky-no-retry", 0) == 2
+
+            result = run(mudl, temp, base + "/single-flaky-retry",
+                         "single-retry.bin", "--retries", "1", timeout=20)
+            assert result.returncode == 0, result.stderr.decode(errors="replace")
+            assert Handler.counts.get("/single-flaky-retry", 0) == 3
+            assert hashlib.sha256(
+                (temp / "single-retry.bin").read_bytes()).digest() == expected
+
+            for invalid_retries in ("101", "-1", "abc", "2147483648"):
+                command = [str(mudl), "--retries", invalid_retries,
+                           base + "/range"]
+                result = subprocess.run(command, capture_output=True, timeout=5)
+                stderr = result.stderr.decode(errors="replace")
+                assert result.returncode != 0, invalid_retries
+                assert "expected 0-100" in stderr, stderr
 
             resume_file = temp / "resume.bin"
             partial = len(DATA) // 2

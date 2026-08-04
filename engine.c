@@ -28,6 +28,8 @@ void engine_interrupt(void) {
 /* Single-thread fallback */
 static int download_single(options_t* opts, const char* outpath,
                            char* path, int64_t file_size);
+static bool single_retry_wait(const options_t* opts, int* retry_count,
+                              const char* reason);
 
 /* Multi-thread download */
 static int download_multi(options_t* opts, const char* outpath,
@@ -257,6 +259,27 @@ int engine_run(const options_t* options) {
 }
 
 /* ===== Single-thread fallback ===== */
+static bool single_retry_wait(const options_t* opts, int* retry_count,
+                              const char* reason) {
+    if (*retry_count >= opts->max_retries) return false;
+
+    (*retry_count)++;
+    int shift = *retry_count > 5 ? 5 : *retry_count;
+    uint64_t delay_ms = 1000ULL << shift;
+    if (delay_ms > 30000) delay_ms = 30000;
+    infof(opts, "Retrying in %.0f seconds (retry %d/%d): %s\n",
+          delay_ms / 1000.0, *retry_count, opts->max_retries, reason);
+
+    uint64_t deadline = GetTickCount64() + delay_ms;
+    while (!g_interrupted) {
+        uint64_t now = GetTickCount64();
+        if (now >= deadline) return true;
+        DWORD remaining = (DWORD)(deadline - now);
+        Sleep(remaining < 100 ? remaining : 100);
+    }
+    return false;
+}
+
 static int download_single(options_t* opts, const char* outpath,
                            char* path, int64_t file_size) {
     /* Check for resume (segments.bin) */
@@ -284,11 +307,19 @@ static int download_single(options_t* opts, const char* outpath,
     }
 
     infof(opts, "Method:  single-thread%s\n\n",
-           resumed ? " (resume)" : "");
+          resumed ? " (resume)" : "");
+    int retry_count = 0;
+
+retry_download:;
     http_client_t cli;
     if (http_connect(&cli, opts->url, opts->timeout_sec, &opts->proxy) != 0) {
-        fprintf(stderr, "Error: %s\n", cli.last_error);
-        return 2;
+        char reason[256];
+        snprintf(reason, sizeof(reason), "%s", cli.last_error);
+        http_close(&cli);
+        if (single_retry_wait(opts, &retry_count, reason))
+            goto retry_download;
+        if (!g_interrupted) fprintf(stderr, "Error: %s\n", reason);
+        return g_interrupted ? 4 : 2;
     }
 
     progress_t prog;
@@ -331,17 +362,25 @@ static int download_single(options_t* opts, const char* outpath,
 
         /* Update URL and reconnect */
         snprintf(opts->url, sizeof(opts->url), "%s", get_resp.location);
-        if (http_connect(&cli, opts->url, opts->timeout_sec, &opts->proxy) != 0) {
-            fprintf(stderr, "Redirect error: %s\n", cli.last_error);
-            file_close(&f);
-            return 2;
-        }
-        /* Update path */
+
+        /* Update path before connecting so a failed redirect connection can
+           retry the redirected URL with the matching request target. */
         char scheme[16], host[256], path_new[HTTP_MAX_PATH];
         int port;
         http_parse_url(opts->url, scheme, sizeof(scheme),
                        host, sizeof(host), &port, path_new, sizeof(path_new));
         snprintf(path, HTTP_MAX_PATH, "%s", path_new);
+
+        if (http_connect(&cli, opts->url, opts->timeout_sec, &opts->proxy) != 0) {
+            char reason[256];
+            snprintf(reason, sizeof(reason), "redirect: %.245s", cli.last_error);
+            file_close(&f);
+            http_close(&cli);
+            if (single_retry_wait(opts, &retry_count, reason))
+                goto retry_download;
+            if (!g_interrupted) fprintf(stderr, "Error: %s\n", reason);
+            return g_interrupted ? 4 : 2;
+        }
 
         r = http_request(&cli, HTTP_GET, path,
                          resume_pos > 0 ? range_start : "0-", NULL,
@@ -351,26 +390,42 @@ static int download_single(options_t* opts, const char* outpath,
     }
 
     if (r != 0) {
-        fprintf(stderr, "Error: %s\n", cli.last_error);
+        char reason[256];
+        snprintf(reason, sizeof(reason), "%s", cli.last_error);
         file_close(&f);
         http_close(&cli);
-        return 2;
+        if (single_retry_wait(opts, &retry_count, reason))
+            goto retry_download;
+        if (!g_interrupted) fprintf(stderr, "Error: %s\n", reason);
+        return g_interrupted ? 4 : 2;
     }
 
     if (get_resp.status_code != 200 && get_resp.status_code != 206) {
-        fprintf(stderr, "Error: HTTP status %d\n", get_resp.status_code);
+        char reason[64];
+        snprintf(reason, sizeof(reason), "HTTP status %d", get_resp.status_code);
         file_close(&f);
         http_close(&cli);
-        return 2;
+        if (single_retry_wait(opts, &retry_count, reason))
+            goto retry_download;
+        if (!g_interrupted) fprintf(stderr, "Error: %s\n", reason);
+        return g_interrupted ? 4 : 2;
     }
     if (resume_pos > 0 &&
         (get_resp.status_code != 206 ||
          get_resp.content_range_start != resume_pos ||
          get_resp.content_range_total != file_size)) {
-        fprintf(stderr, "Error: server did not honor the resume range\n");
         file_close(&f);
         http_close(&cli);
-        return 2;
+        resume_pos = 0;
+        resume_crc32 = 0;
+        resumed = false;
+        persist_remove(segpath);
+        if (single_retry_wait(opts, &retry_count,
+                              "server did not honor the resume range"))
+            goto retry_download;
+        if (!g_interrupted)
+            fprintf(stderr, "Error: server did not honor the resume range\n");
+        return g_interrupted ? 4 : 2;
     }
     if (get_resp.status_code == 206 && file_size > 0 &&
         (get_resp.content_range_start != resume_pos ||
@@ -398,6 +453,8 @@ static int download_single(options_t* opts, const char* outpath,
     int64_t downloaded = resume_pos;
     uint32_t download_crc32 = resume_crc32;
     bool download_error = false;
+    bool retryable_error = false;
+    char transfer_error[256] = {0};
     speed_tracker_t st;
     speed_init(&st, resume_pos);
     uint64_t last_save_ms = GetTickCount64();
@@ -405,15 +462,16 @@ static int download_single(options_t* opts, const char* outpath,
     while (!g_interrupted) {
         int bytes = http_read_body(&cli, buf, BUF_SIZE);
         if (bytes < 0) {
-            fprintf(stderr, "\nError: %s\n", cli.last_error);
+            snprintf(transfer_error, sizeof(transfer_error), "%s", cli.last_error);
             download_error = true;
+            retryable_error = true;
             break;
         }
         if (bytes == 0) break;
 
         int written = file_write(&f, buf, bytes);
         if (written != bytes) {
-            fprintf(stderr, "\nError: %s\n", f.last_error);
+            snprintf(transfer_error, sizeof(transfer_error), "%s", f.last_error);
             download_error = true;
             break;
         }
@@ -456,6 +514,21 @@ static int download_single(options_t* opts, const char* outpath,
     file_close(&f);
     http_close(&cli);
 
+    if (download_error && retryable_error) {
+        if (get_resp.status_code == 206 && file_size > 0) {
+            resume_pos = downloaded;
+            resume_crc32 = download_crc32;
+            resumed = true;
+        } else {
+            resume_pos = 0;
+            resume_crc32 = 0;
+            resumed = false;
+            persist_remove(segpath);
+        }
+        if (single_retry_wait(opts, &retry_count, transfer_error))
+            goto retry_download;
+    }
+
     if (g_interrupted) {
         /* Save state for resume on Ctrl+C */
         if (file_size > 0 && downloaded > 0) {
@@ -484,10 +557,27 @@ static int download_single(options_t* opts, const char* outpath,
     }
 
     if (download_error) {
+        fprintf(stderr, "\nError: %s\n", transfer_error);
         return 2;
     }
 
     if (file_size > 0 && downloaded != file_size) {
+        char reason[128];
+        snprintf(reason, sizeof(reason), "incomplete response (%lld/%lld bytes)",
+                 (long long)downloaded, (long long)file_size);
+        if (get_resp.status_code == 206) {
+            resume_pos = downloaded;
+            resume_crc32 = download_crc32;
+            resumed = true;
+        } else {
+            resume_pos = 0;
+            resume_crc32 = 0;
+            resumed = false;
+            persist_remove(segpath);
+        }
+        if (single_retry_wait(opts, &retry_count, reason))
+            goto retry_download;
+
         fprintf(stderr,
                 "\nError: incomplete download (%lld/%lld bytes). Resume file kept.\n",
                 (long long)downloaded, (long long)file_size);

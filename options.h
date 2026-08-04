@@ -12,6 +12,7 @@
 #define DEFAULT_CONNECTIONS 8
 #define DEFAULT_TIMEOUT 30
 #define DEFAULT_RETRY 5
+#define MAX_RETRIES 100
 
 typedef struct {
     char        url[HTTP_MAX_URL];

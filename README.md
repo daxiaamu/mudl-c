@@ -86,7 +86,7 @@ strip mudl.exe
        --referer <URL>      Custom Referer
        --header <K:V>       Custom HTTP header (repeatable)
        --timeout <SEC>      Connection timeout (default 30)
-       --retries <N>        Max retries per segment (default 5)
+       --retries <N>        Retries after failure (default 5, max 100)
        --checksum <TYPE=DIGEST> Verify file checksum after download
        --proxy <PROXY>      Alias for --all-proxy
        --all-proxy <PROXY>  Proxy for all HTTP(S) downloads
@@ -100,6 +100,12 @@ strip mudl.exe
 Use `-q`/`--quiet` for scripts that should hide detail logs while keeping progress visible. Use `--progress none` for fully silent downloads. Use `--progress line` for background jobs or log files. It prints periodic full lines instead of rewriting the same console line.
 
 Custom headers may contain spaces when quoted by the shell, for example `--header "X-Test: hello world"`.
+
+`--retries N` allows up to `N` additional attempts after the initial attempt;
+`0` disables retries. The accepted range is 0-100. Range downloads retain
+verified progress. If a server does not support ranges, a failed transfer is
+restarted from byte 0 so separate responses are never joined into a corrupt
+file.
 
 ## Multiple Sources
 
@@ -186,4 +192,7 @@ tests/             C unit tests and HTTP integration tests
 
 ## License
 
-[MIT](LICENSE)
+Copyright (C) 2026 daxiaamu.
+
+Licensed under the [GNU General Public License v3.0 only](LICENSE)
+(`GPL-3.0-only`).
