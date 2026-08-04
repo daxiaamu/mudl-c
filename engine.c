@@ -30,11 +30,17 @@ void engine_interrupt(void) {
 static int download_single(options_t* opts, const char* outpath,
                            char* path, int64_t file_size,
                            oss_ticket_t* ticket);
+static bool single_retry_wait(const options_t* opts, int* retry_count,
+                              const char* reason);
 
 /* Multi-thread download */
 static int download_multi(options_t* opts, const char* outpath,
-                          const char* path, int64_t total_size,
-                          oss_ticket_t* ticket);
+                          int64_t total_size,
+                          download_source_t* sources, int source_count);
+static int prepare_sources(options_t* opts, download_source_t* sources,
+                           oss_ticket_t* tickets, int* source_count,
+                           int64_t* file_size);
+static void destroy_tickets(oss_ticket_t* tickets, int count);
 
 
 /* Speed tracker */
@@ -57,37 +63,103 @@ typedef struct {
 static void speed_init(speed_tracker_t* st, int64_t initial_downloaded);
 static void speed_tick(speed_tracker_t* st, int64_t total_downloaded);
 
+static void destroy_tickets(oss_ticket_t* tickets, int count) {
+    for (int i = 0; i < count; i++) oss_ticket_destroy(&tickets[i]);
+}
+
+static int prepare_sources(options_t* opts, download_source_t* sources,
+                           oss_ticket_t* tickets, int* source_count,
+                           int64_t* file_size) {
+    *source_count = 0;
+    *file_size = 0;
+
+    for (int i = 0; i < opts->url_count; i++) {
+        download_source_t candidate;
+        char resolved_url[HTTP_MAX_URL];
+        char err[512] = {0};
+        infof(opts, "Checking source %d/%d: %s\n",
+              i + 1, opts->url_count, opts->urls[i]);
+        if (oss_ticket_init(&tickets[i], opts->urls[i], opts->timeout_sec,
+                            opts->user_agent, opts->referer,
+                            (const char**)opts->extra_headers, opts->extra_count,
+                            &opts->proxy, err, sizeof(err)) != 0) {
+            infof(opts, "Source %d unavailable: %s\n", i + 1, err);
+            oss_ticket_destroy(&tickets[i]);
+            continue;
+        }
+        oss_ticket_snapshot(&tickets[i], resolved_url, sizeof(resolved_url), NULL);
+        if (source_probe(&candidate, resolved_url, opts->timeout_sec,
+                         opts->user_agent, opts->referer,
+                         (const char**)opts->extra_headers, opts->extra_count,
+                         &opts->proxy, err, sizeof(err)) != 0) {
+            infof(opts, "Source %d unavailable: %s\n", i + 1, err);
+            oss_ticket_destroy(&tickets[i]);
+            continue;
+        }
+        if (*source_count > 0 && !source_matches(&candidate, &sources[0])) {
+            infof(opts, "Source %d rejected: file size or sample fingerprint differs\n",
+                  i + 1);
+            oss_ticket_destroy(&tickets[i]);
+            continue;
+        }
+        candidate.ticket = &tickets[i];
+        oss_ticket_set_current(&tickets[i], candidate.url);
+        sources[(*source_count)++] = candidate;
+        infof(opts, "Source %d accepted: %s\n", i + 1, candidate.url);
+    }
+
+    if (*source_count == 0) {
+        fprintf(stderr, "Error: no usable source URL\n");
+        return -1;
+    }
+
+    *file_size = sources[0].file_size;
+    snprintf(opts->url, sizeof(opts->url), "%s", sources[0].url);
+    snprintf(opts->resource_validator, sizeof(opts->resource_validator),
+             "mirrors-v1:%lld:%08x:%d:%08x:%d",
+             (long long)sources[0].file_size,
+             sources[0].first_crc32, sources[0].first_length,
+             sources[0].last_crc32, sources[0].last_length);
+    infof(opts, "Usable sources: %d/%d\n", *source_count, opts->url_count);
+    return 0;
+}
+
 int engine_run(const options_t* options) {
     options_t opts = *options;
     http_global_init();
 
-    oss_ticket_t ticket;
-    char ticket_error[512] = {0};
-    if (oss_ticket_init(&ticket, opts.url, opts.timeout_sec,
-                        opts.user_agent, opts.referer,
-                        (const char**)opts.extra_headers, opts.extra_count,
-                        &opts.proxy, ticket_error, sizeof(ticket_error)) != 0) {
-        fprintf(stderr, "Error: Experimental compatibility initialization failed: %s\n",
-                ticket_error);
-        oss_ticket_destroy(&ticket);
-        http_global_cleanup();
-        return 1;
-    }
-    if (ticket.enabled) {
-        oss_ticket_snapshot(&ticket, opts.url, sizeof(opts.url), NULL);
-        infof(&opts, "MUDL Experimental compatibility enabled\n");
+    oss_ticket_t tickets[MAX_DOWNLOAD_SOURCES];
+    memset(tickets, 0, sizeof(tickets));
+    if (opts.url_count == 1) {
+        char ticket_error[512] = {0};
+        if (oss_ticket_init(&tickets[0], opts.url, opts.timeout_sec,
+                            opts.user_agent, opts.referer,
+                            (const char**)opts.extra_headers, opts.extra_count,
+                            &opts.proxy, ticket_error, sizeof(ticket_error)) != 0) {
+            fprintf(stderr, "Error: Experimental compatibility initialization failed: %s\n",
+                    ticket_error);
+            destroy_tickets(tickets, MAX_DOWNLOAD_SOURCES);
+            http_global_cleanup();
+            return 1;
+        }
+        if (tickets[0].enabled) {
+            oss_ticket_snapshot(&tickets[0], opts.url, sizeof(opts.url), NULL);
+            infof(&opts, "MUDL Experimental compatibility enabled\n");
+        }
     }
 
     char outpath[MAX_PATH * 2];
     if (file_resolve_output_path(opts.url, opts.dir, opts.output,
                                  outpath, sizeof(outpath)) != 0) {
         fprintf(stderr, "Error: -o/--output expects a filename only. Use -d/--dir for the output directory.\n");
-        oss_ticket_destroy(&ticket);
+        destroy_tickets(tickets, MAX_DOWNLOAD_SOURCES);
         http_global_cleanup();
         return 1;
     }
 
     infof(&opts, "URL:     %s\n", opts.url);
+    if (opts.url_count > 1)
+        infof(&opts, "Sources: %d\n", opts.url_count);
     infof(&opts, "Output:  %s\n", outpath);
     infof(&opts, "Threads: %d\n\n", opts.connections);
 
@@ -101,35 +173,49 @@ int engine_run(const options_t* options) {
     infof(&opts, "Downloading directly (skipping HEAD probe)\n\n");
 
     int exit_code;
-    http_client_t probe;
-    http_response_t probe_resp;
     int64_t file_size = 0;
     bool multi_supported = false;
-    int r;
-    int redirect_count;
+    download_source_t sources[MAX_DOWNLOAD_SOURCES];
+    memset(sources, 0, sizeof(sources));
+    int source_count = 0;
+
+    if (opts.url_count > 1) {
+        if (prepare_sources(&opts, sources, tickets, &source_count,
+                            &file_size) != 0) {
+            destroy_tickets(tickets, MAX_DOWNLOAD_SOURCES);
+            http_global_cleanup();
+            return 1;
+        }
+        multi_supported = true;
+        snprintf(path, sizeof(path), "%s", sources[0].path);
+        infof(&opts, "Sources support Range (file size: %lld bytes)\n",
+              (long long)file_size);
+    } else {
+    http_client_t probe;
+    http_response_t probe_resp;
     int probe_ticket_refreshes = 0;
     unsigned long probe_ticket_generation = 0;
 
 probe_connect:
-    oss_ticket_snapshot(&ticket, opts.url, sizeof(opts.url),
+    oss_ticket_snapshot(&tickets[0], opts.url, sizeof(opts.url),
                         &probe_ticket_generation);
     http_parse_url(opts.url, scheme, sizeof(scheme),
                    host, sizeof(host), &port, path, sizeof(path));
 
     if (http_connect(&probe, opts.url, opts.timeout_sec, &opts.proxy) != 0) {
         fprintf(stderr, "Error: %s\n", probe.last_error);
-        oss_ticket_destroy(&ticket);
+        destroy_tickets(tickets, MAX_DOWNLOAD_SOURCES);
         http_global_cleanup();
         return 1;
     }
 
-    r = http_request(&probe, HTTP_GET, path, "0-", NULL,
-                     opts.user_agent, opts.referer,
-                     (const char**)opts.extra_headers, opts.extra_count,
-                     &probe_resp);
+    int r = http_request(&probe, HTTP_GET, path, "0-", NULL,
+                         opts.user_agent, opts.referer,
+                         (const char**)opts.extra_headers, opts.extra_count,
+                         &probe_resp);
 
     /* Follow redirects (OSS signed URLs often redirect to CDN) */
-    redirect_count = 0;
+    int redirect_count = 0;
     while (r == 0 && (probe_resp.status_code == 301 ||
            probe_resp.status_code == 302 ||
            probe_resp.status_code == 307 ||
@@ -142,7 +228,7 @@ probe_connect:
         snprintf(opts.url, sizeof(opts.url), "%s", probe_resp.location);
         if (http_connect(&probe, opts.url, opts.timeout_sec, &opts.proxy) != 0) {
             fprintf(stderr, "Redirect error: %s\n", probe.last_error);
-            oss_ticket_destroy(&ticket);
+            destroy_tickets(tickets, MAX_DOWNLOAD_SOURCES);
             http_global_cleanup();
             return 1;
         }
@@ -160,15 +246,16 @@ probe_connect:
                          &probe_resp);
     }
 
-    if (r == 0 && ticket.enabled &&
+    if (r == 0 && tickets[0].enabled &&
         (probe_resp.status_code == 401 || probe_resp.status_code == 403 ||
          probe_resp.status_code == 416) && probe_ticket_refreshes < 4) {
+        char refresh_error[512] = {0};
         http_close(&probe);
-        if (oss_ticket_refresh(&ticket, probe_ticket_generation,
-                               ticket_error, sizeof(ticket_error)) != 0) {
+        if (oss_ticket_refresh(&tickets[0], probe_ticket_generation,
+                               refresh_error, sizeof(refresh_error)) != 0) {
             fprintf(stderr, "Error: Experimental URL refresh failed: %s\n",
-                    ticket_error);
-            oss_ticket_destroy(&ticket);
+                    refresh_error);
+            destroy_tickets(tickets, MAX_DOWNLOAD_SOURCES);
             http_global_cleanup();
             return 1;
         }
@@ -179,7 +266,7 @@ probe_connect:
     if (r != 0) {
         fprintf(stderr, "Error: %s\n", probe.last_error);
         http_close(&probe);
-        oss_ticket_destroy(&ticket);
+        destroy_tickets(tickets, MAX_DOWNLOAD_SOURCES);
         http_global_cleanup();
         return 1;
     }
@@ -196,23 +283,33 @@ probe_connect:
     } else if (probe_resp.status_code != 200) {
         fprintf(stderr, "Error: HTTP status %d\n", probe_resp.status_code);
         http_close(&probe);
-        oss_ticket_destroy(&ticket);
+        destroy_tickets(tickets, MAX_DOWNLOAD_SOURCES);
         http_global_cleanup();
         return 1;
     }
     response_validator(&probe_resp, opts.resource_validator,
                        sizeof(opts.resource_validator));
     http_close(&probe);
-    oss_ticket_set_current(&ticket, opts.url);
+    oss_ticket_set_current(&tickets[0], opts.url);
+    snprintf(sources[0].url, sizeof(sources[0].url), "%s", opts.url);
+    snprintf(sources[0].path, sizeof(sources[0].path), "%s", path);
+    snprintf(sources[0].validator, sizeof(sources[0].validator), "%s",
+             opts.resource_validator);
+    sources[0].file_size = file_size;
+    sources[0].ticket = &tickets[0];
+    source_count = 1;
+    }
 
     /* The segmented engine also supports one worker. Keeping Range downloads
        on this path preserves every verified segment when concurrency changes. */
     if (multi_supported) {
-        exit_code = download_multi(&opts, outpath, path, file_size, &ticket);
+        exit_code = download_multi(&opts, outpath, file_size,
+                                   sources, source_count);
     } else {
         if (file_size > 0)
             infof(&opts, "Using single-thread (connections=%d)\n\n", opts.connections);
-        exit_code = download_single(&opts, outpath, path, file_size, &ticket);
+        exit_code = download_single(&opts, outpath, path, file_size,
+                                    &tickets[0]);
     }
 
     if (exit_code == 0 && opts.checksum[0]) {
@@ -235,12 +332,33 @@ probe_connect:
         }
     }
 
-    oss_ticket_destroy(&ticket);
+    destroy_tickets(tickets, MAX_DOWNLOAD_SOURCES);
     http_global_cleanup();
     return exit_code;
 }
 
 /* ===== Single-thread fallback ===== */
+static bool single_retry_wait(const options_t* opts, int* retry_count,
+                              const char* reason) {
+    if (*retry_count >= opts->max_retries) return false;
+
+    (*retry_count)++;
+    int shift = *retry_count > 5 ? 5 : *retry_count;
+    uint64_t delay_ms = 1000ULL << shift;
+    if (delay_ms > 30000) delay_ms = 30000;
+    infof(opts, "Retrying in %.0f seconds (retry %d/%d): %s\n",
+          delay_ms / 1000.0, *retry_count, opts->max_retries, reason);
+
+    uint64_t deadline = GetTickCount64() + delay_ms;
+    while (!g_interrupted) {
+        uint64_t now = GetTickCount64();
+        if (now >= deadline) return true;
+        DWORD remaining = (DWORD)(deadline - now);
+        Sleep(remaining < 100 ? remaining : 100);
+    }
+    return false;
+}
+
 static int download_single(options_t* opts, const char* outpath,
                            char* path, int64_t file_size,
                            oss_ticket_t* ticket) {
@@ -269,14 +387,28 @@ static int download_single(options_t* opts, const char* outpath,
     }
 
     infof(opts, "Method:  single-thread%s\n\n",
-           resumed ? " (resume)" : "");
-    http_client_t cli;
+          resumed ? " (resume)" : "");
+    int retry_count = 0;
+    int ticket_refreshes = 0;
+
+retry_download:;
     unsigned long ticket_generation = 0;
     oss_ticket_snapshot(ticket, opts->url, sizeof(opts->url),
                         &ticket_generation);
+    char request_scheme[16], request_host[256];
+    int request_port;
+    http_parse_url(opts->url, request_scheme, sizeof(request_scheme),
+                   request_host, sizeof(request_host), &request_port,
+                   path, HTTP_MAX_PATH);
+    http_client_t cli;
     if (http_connect(&cli, opts->url, opts->timeout_sec, &opts->proxy) != 0) {
-        fprintf(stderr, "Error: %s\n", cli.last_error);
-        return 2;
+        char reason[256];
+        snprintf(reason, sizeof(reason), "%s", cli.last_error);
+        http_close(&cli);
+        if (single_retry_wait(opts, &retry_count, reason))
+            goto retry_download;
+        if (!g_interrupted) fprintf(stderr, "Error: %s\n", reason);
+        return g_interrupted ? 4 : 2;
     }
 
     progress_t prog;
@@ -302,9 +434,6 @@ static int download_single(options_t* opts, const char* outpath,
        If not, it returns 200 with full content. */
     char range_start[32];
     snprintf(range_start, sizeof(range_start), "%lld", (long long)resume_pos);
-    int ticket_refreshes = 0;
-send_single_request:
-    ;
     int r = http_request(&cli, HTTP_GET, path,
                          resume_pos > 0 ? range_start : "0-", NULL,
                          opts->user_agent, opts->referer,
@@ -322,17 +451,25 @@ send_single_request:
 
         /* Update URL and reconnect */
         snprintf(opts->url, sizeof(opts->url), "%s", get_resp.location);
-        if (http_connect(&cli, opts->url, opts->timeout_sec, &opts->proxy) != 0) {
-            fprintf(stderr, "Redirect error: %s\n", cli.last_error);
-            file_close(&f);
-            return 2;
-        }
-        /* Update path */
+
+        /* Update path before connecting so a failed redirect connection can
+           retry the redirected URL with the matching request target. */
         char scheme[16], host[256], path_new[HTTP_MAX_PATH];
         int port;
         http_parse_url(opts->url, scheme, sizeof(scheme),
                        host, sizeof(host), &port, path_new, sizeof(path_new));
         snprintf(path, HTTP_MAX_PATH, "%s", path_new);
+
+        if (http_connect(&cli, opts->url, opts->timeout_sec, &opts->proxy) != 0) {
+            char reason[256];
+            snprintf(reason, sizeof(reason), "redirect: %.245s", cli.last_error);
+            file_close(&f);
+            http_close(&cli);
+            if (single_retry_wait(opts, &retry_count, reason))
+                goto retry_download;
+            if (!g_interrupted) fprintf(stderr, "Error: %s\n", reason);
+            return g_interrupted ? 4 : 2;
+        }
 
         r = http_request(&cli, HTTP_GET, path,
                          resume_pos > 0 ? range_start : "0-", NULL,
@@ -341,58 +478,61 @@ send_single_request:
                          &get_resp);
     }
 
+    oss_ticket_set_current(ticket, opts->url);
+
     if (r == 0 && ticket->enabled &&
         (get_resp.status_code == 401 || get_resp.status_code == 403 ||
          get_resp.status_code == 416) && ticket_refreshes < 4) {
         char refresh_error[512] = {0};
+        file_close(&f);
         http_close(&cli);
         if (oss_ticket_refresh(ticket, ticket_generation,
                                refresh_error, sizeof(refresh_error)) != 0) {
             fprintf(stderr, "Error: Experimental URL refresh failed: %s\n",
                     refresh_error);
-            file_close(&f);
             return 2;
         }
         ticket_refreshes++;
-        oss_ticket_snapshot(ticket, opts->url, sizeof(opts->url),
-                            &ticket_generation);
-        char scheme[16], host[256], path_new[HTTP_MAX_PATH];
-        int port;
-        http_parse_url(opts->url, scheme, sizeof(scheme), host, sizeof(host),
-                       &port, path_new, sizeof(path_new));
-        snprintf(path, HTTP_MAX_PATH, "%s", path_new);
-        if (http_connect(&cli, opts->url, opts->timeout_sec, &opts->proxy) != 0) {
-            fprintf(stderr, "Error: %s\n", cli.last_error);
-            file_close(&f);
-            return 2;
-        }
-        redirect_count = 0;
-        goto send_single_request;
+        goto retry_download;
     }
 
-    oss_ticket_set_current(ticket, opts->url);
-
     if (r != 0) {
-        fprintf(stderr, "Error: %s\n", cli.last_error);
+        char reason[256];
+        snprintf(reason, sizeof(reason), "%s", cli.last_error);
         file_close(&f);
         http_close(&cli);
-        return 2;
+        if (single_retry_wait(opts, &retry_count, reason))
+            goto retry_download;
+        if (!g_interrupted) fprintf(stderr, "Error: %s\n", reason);
+        return g_interrupted ? 4 : 2;
     }
 
     if (get_resp.status_code != 200 && get_resp.status_code != 206) {
-        fprintf(stderr, "Error: HTTP status %d\n", get_resp.status_code);
+        char reason[64];
+        snprintf(reason, sizeof(reason), "HTTP status %d", get_resp.status_code);
         file_close(&f);
         http_close(&cli);
-        return 2;
+        if (single_retry_wait(opts, &retry_count, reason))
+            goto retry_download;
+        if (!g_interrupted) fprintf(stderr, "Error: %s\n", reason);
+        return g_interrupted ? 4 : 2;
     }
     if (resume_pos > 0 &&
         (get_resp.status_code != 206 ||
          get_resp.content_range_start != resume_pos ||
          get_resp.content_range_total != file_size)) {
-        fprintf(stderr, "Error: server did not honor the resume range\n");
         file_close(&f);
         http_close(&cli);
-        return 2;
+        resume_pos = 0;
+        resume_crc32 = 0;
+        resumed = false;
+        persist_remove(segpath);
+        if (single_retry_wait(opts, &retry_count,
+                              "server did not honor the resume range"))
+            goto retry_download;
+        if (!g_interrupted)
+            fprintf(stderr, "Error: server did not honor the resume range\n");
+        return g_interrupted ? 4 : 2;
     }
     if (get_resp.status_code == 206 && file_size > 0 &&
         (get_resp.content_range_start != resume_pos ||
@@ -420,6 +560,8 @@ send_single_request:
     int64_t downloaded = resume_pos;
     uint32_t download_crc32 = resume_crc32;
     bool download_error = false;
+    bool retryable_error = false;
+    char transfer_error[256] = {0};
     speed_tracker_t st;
     speed_init(&st, resume_pos);
     uint64_t last_save_ms = GetTickCount64();
@@ -427,15 +569,16 @@ send_single_request:
     while (!g_interrupted) {
         int bytes = http_read_body(&cli, buf, BUF_SIZE);
         if (bytes < 0) {
-            fprintf(stderr, "\nError: %s\n", cli.last_error);
+            snprintf(transfer_error, sizeof(transfer_error), "%s", cli.last_error);
             download_error = true;
+            retryable_error = true;
             break;
         }
         if (bytes == 0) break;
 
         int written = file_write(&f, buf, bytes);
         if (written != bytes) {
-            fprintf(stderr, "\nError: %s\n", f.last_error);
+            snprintf(transfer_error, sizeof(transfer_error), "%s", f.last_error);
             download_error = true;
             break;
         }
@@ -478,6 +621,21 @@ send_single_request:
     file_close(&f);
     http_close(&cli);
 
+    if (download_error && retryable_error) {
+        if (get_resp.status_code == 206 && file_size > 0) {
+            resume_pos = downloaded;
+            resume_crc32 = download_crc32;
+            resumed = true;
+        } else {
+            resume_pos = 0;
+            resume_crc32 = 0;
+            resumed = false;
+            persist_remove(segpath);
+        }
+        if (single_retry_wait(opts, &retry_count, transfer_error))
+            goto retry_download;
+    }
+
     if (g_interrupted) {
         /* Save state for resume on Ctrl+C */
         if (file_size > 0 && downloaded > 0) {
@@ -506,10 +664,27 @@ send_single_request:
     }
 
     if (download_error) {
+        fprintf(stderr, "\nError: %s\n", transfer_error);
         return 2;
     }
 
     if (file_size > 0 && downloaded != file_size) {
+        char reason[128];
+        snprintf(reason, sizeof(reason), "incomplete response (%lld/%lld bytes)",
+                 (long long)downloaded, (long long)file_size);
+        if (get_resp.status_code == 206) {
+            resume_pos = downloaded;
+            resume_crc32 = download_crc32;
+            resumed = true;
+        } else {
+            resume_pos = 0;
+            resume_crc32 = 0;
+            resumed = false;
+            persist_remove(segpath);
+        }
+        if (single_retry_wait(opts, &retry_count, reason))
+            goto retry_download;
+
         fprintf(stderr,
                 "\nError: incomplete download (%lld/%lld bytes). Resume file kept.\n",
                 (long long)downloaded, (long long)file_size);
@@ -545,8 +720,8 @@ send_single_request:
 
 /* ===== Multi-thread download ===== */
 static int download_multi(options_t* opts, const char* outpath,
-                          const char* path, int64_t total_size,
-                          oss_ticket_t* ticket) {
+                          int64_t total_size,
+                          download_source_t* sources, int source_count) {
     int conn = opts->connections;
     if (conn == 1)
         infof(opts, "Method:  segmented (1 connection)\n\n");
@@ -628,19 +803,20 @@ static int download_multi(options_t* opts, const char* outpath,
     /* Worker context */
     worker_ctx_t base_ctx;
     memset(&base_ctx, 0, sizeof(base_ctx));
-    base_ctx.url = opts->url;
+    volatile LONG next_source = -1;
+    base_ctx.sources = sources;
+    base_ctx.source_count = source_count;
+    base_ctx.next_source = &next_source;
     base_ctx.user_agent = opts->user_agent;
     base_ctx.referer = opts->referer;
     base_ctx.extra_headers = (const char**)opts->extra_headers;
     base_ctx.extra_count = opts->extra_count;
     base_ctx.timeout_sec = opts->timeout_sec;
-    base_ctx.resource_validator = opts->resource_validator;
     base_ctx.proxy = &opts->proxy;
     base_ctx.segmgr = &segmgr;
     base_ctx.output_file = &output_file;
     base_ctx.interrupted = &g_interrupted;
     base_ctx.global_downloaded = &st.downloaded;
-    base_ctx.ticket = ticket;
 
     progress_t prog;
     progress_init(&prog, opts->progress_mode, total_size,

@@ -2,14 +2,31 @@
 
 All notable changes to MUDL-C are documented in this file.
 
+## [0.5.17-experimental] - 2026-08-05
+
+### Added
+
+- Added automatic failover across up to 16 download sources.
+- Extended Experimental compatibility to work independently for every source.
+
+### Changed
+
+- Kept verified segmented progress when switching between matching sources.
+
 ## [0.5.16-experimental] - 2026-07-14
 
 ### Added
 
-- Added experimental renewable download tickets for supported OPPO, OnePlus,
-  ColorOS, allawntech, and allawnos OTA endpoints.
+- Added Experimental compatibility enhancements for supported download links.
 - Added CRC32 combination so verified contiguous resume ranges can be compacted
-  without reading the downloaded data a second time.
+  without reading downloaded data a second time.
+
+## [0.5.12] - 2026-07-14
+
+### Added
+
+- Added CRC32 combination so verified contiguous resume ranges can be compacted
+  without reading downloaded data a second time.
 - Added direct tests for retry concurrency limits, CRC32 combination, and resume
   range compaction before repartitioning.
 
@@ -79,7 +96,9 @@ All notable changes to MUDL-C are documented in this file.
 - Resume speed reporting and final summaries to follow aria2-style semantics.
 - Early EOF, disk short-write, and malformed partial-response handling.
 
+[0.5.17-experimental]: https://github.com/daxiaamu/mudl-c/compare/v0.5.16-experimental...v0.5.17-experimental
 [0.5.16-experimental]: https://github.com/daxiaamu/mudl-c/compare/v0.5.11...v0.5.16-experimental
+[0.5.12]: https://github.com/daxiaamu/mudl-c/compare/v0.5.11...v0.5.12
 [0.5.11]: https://github.com/daxiaamu/mudl-c/compare/v0.5.10...v0.5.11
 [0.5.10]: https://github.com/daxiaamu/mudl-c/compare/v0.5.9...v0.5.10
 [0.5.9]: https://github.com/daxiaamu/mudl-c/compare/v0.5.8...v0.5.9

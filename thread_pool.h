@@ -8,24 +8,24 @@
 #include "segment.h"
 #include "http.h"
 #include "file_io.h"
-#include "oss_ticket.h"
+#include "source.h"
 
 /* Worker context passed to each thread */
 typedef struct {
     int          thread_id;
-    const char*  url;
+    download_source_t* sources;
+    int          source_count;
+    volatile LONG* next_source;
     const char*  user_agent;
     const char*  referer;
     const char** extra_headers;
     int          extra_count;
     int          timeout_sec;
-    const char*  resource_validator;
     const proxy_config_t* proxy;
     segment_manager_t* segmgr;
     file_t*      output_file;
     volatile bool* interrupted;
     int64_t*     global_downloaded;
-    oss_ticket_t* ticket;
 } worker_ctx_t;
 
 /* Start N worker threads. Returns array of thread handles. */

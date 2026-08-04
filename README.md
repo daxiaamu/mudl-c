@@ -15,6 +15,7 @@ Actions page.
 | Feature | Description |
 |---------|-------------|
 | Multi-thread downloads | Parallel HTTP range downloads, up to 32 connections |
+| Multiple sources | Downloads one file from up to 16 mirror URLs with automatic failover |
 | Strict resume | Validates segment CRC32 plus the remote ETag/Last-Modified identity |
 | Signed URLs | Handles long redirect URLs used by cloud/CDN signed links |
 | Experimental edition | Experimental compatibility enhancements with the same command-line interface |
@@ -29,6 +30,7 @@ mudl "https://example.com/file.zip"
 mudl -c 1 "https://example.com/file.zip"
 mudl -c 16 -d downloads -o output.zip "https://example.com/file.iso"
 mudl --progress line "https://example.com/file.zip"
+mudl -o file.zip "https://host/file.zip" "https://mirror/file.zip"
 ```
 
 MUDL Experimental includes experimental compatibility enhancements while
@@ -69,9 +71,10 @@ make test
 Manual build:
 
 ```bash
+x86_64-w64-mingw32-windres -O coff -i mudl.rc -o mudl_res.o
 x86_64-w64-mingw32-gcc -std=c11 -O2 -Wall -Wextra -mconsole \
-  -o mudl.exe main.c options.c engine.c http.c url.c schannel.c file_io.c progress.c utils.c \
-  segment.c thread_pool.c persist.c checksum.c \
+  -o mudl.exe main.c options.c engine.c http.c url.c oss_ticket.c source.c schannel.c file_io.c progress.c utils.c \
+  segment.c thread_pool.c persist.c checksum.c mudl_res.o \
   -lws2_32 -lshlwapi -lsecur32 -lshell32 -ladvapi32
 strip mudl.exe
 ```
@@ -88,7 +91,7 @@ strip mudl.exe
        --referer <URL>      Custom Referer
        --header <K:V>       Custom HTTP header (repeatable)
        --timeout <SEC>      Connection timeout (default 30)
-       --retries <N>        Max retries per segment (default 5)
+       --retries <N>        Retries after failure (default 5, max 100)
        --checksum <TYPE=DIGEST> Verify file checksum after download
        --proxy <PROXY>      Alias for --all-proxy
        --all-proxy <PROXY>  Proxy for all HTTP(S) downloads
@@ -102,6 +105,34 @@ strip mudl.exe
 Use `-q`/`--quiet` for scripts that should hide detail logs while keeping progress visible. Use `--progress none` for fully silent downloads. Use `--progress line` for background jobs or log files. It prints periodic full lines instead of rewriting the same console line.
 
 Custom headers may contain spaces when quoted by the shell, for example `--header "X-Test: hello world"`.
+
+`--retries N` allows up to `N` additional attempts after the initial attempt;
+`0` disables retries. The accepted range is 0-100. Range downloads retain
+verified progress. If a server does not support ranges, a failed transfer is
+restarted from byte 0 so separate responses are never joined into a corrupt
+file.
+
+## Multiple Sources
+
+Like aria2, multiple URL arguments are treated as sources for one file:
+
+```bash
+mudl -c 16 -o firmware.zip \
+  "https://server.example/firmware.zip" \
+  "https://mirror.example/firmware.zip"
+```
+
+MUDL checks every source before downloading. Sources must support byte ranges
+and must have the same file size plus matching 64 KiB samples from the start
+and end of the file. The first usable URL establishes the expected identity;
+unavailable or mismatched sources are skipped. Workers
+rotate across accepted sources; if one expires, disconnects, or returns an
+invalid range, the same segment is continued from another source before its
+normal retry count is consumed.
+
+Up to 16 source URLs are accepted. This syntax does not create separate
+download tasks. For high-value files, use `--checksum` as the final
+whole-file integrity check.
 
 ## Checksum
 
@@ -151,6 +182,7 @@ main.c            Process entry, console setup, and signal forwarding
 options.c / .h    Command-line parsing, option model, and defaults
 engine.c / .h     Download probing, orchestration, and completion checks
 url.c / .h        URL, proxy, and no-proxy parsing
+source.c / .h     Mirror probing, identity sampling, and source state
 http.c / .h       HTTP request, response, and transport orchestration
 schannel.c / .h   Windows SChannel TLS handshake and encrypted I/O
 file_io.c / .h    Thread-safe file I/O and UTF-8 path handling
@@ -165,4 +197,7 @@ tests/             C unit tests and HTTP integration tests
 
 ## License
 
-[MIT](LICENSE)
+Copyright (C) 2026 daxiaamu.
+
+Licensed under the [GNU General Public License v3.0 only](LICENSE)
+(`GPL-3.0-only`).

@@ -6,14 +6,18 @@
 
 #include "http.h"
 #include "progress.h"
+#include "source.h"
 
-#define MUDL_VERSION "0.5.16-experimental"
+#define MUDL_VERSION "0.5.17-experimental"
 #define DEFAULT_CONNECTIONS 8
 #define DEFAULT_TIMEOUT 30
 #define DEFAULT_RETRY 5
+#define MAX_RETRIES 100
 
 typedef struct {
     char        url[HTTP_MAX_URL];
+    char        urls[MAX_DOWNLOAD_SOURCES][HTTP_MAX_URL];
+    int         url_count;
     char        output[MAX_PATH * 2];
     char        dir[MAX_PATH * 2];
     int         connections;

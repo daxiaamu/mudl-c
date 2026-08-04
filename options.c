@@ -4,11 +4,25 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <errno.h>
 
 static void set_proxy_option(proxy_endpoint_t* dst, const char* value);
+static void add_url_option(options_t* opts, const char* value);
 static void parse_embedded_args(options_t* opts, char* arg_tail);
 static void split_embedded_args(options_t* opts, char* value);
 static char* trim_token_quotes(char* s);
+static int parse_retries(const char* value);
+
+static int parse_retries(const char* value) {
+    char* end = NULL;
+    errno = 0;
+    long parsed = strtol(value, &end, 10);
+    if (!value[0] || errno == ERANGE || !end || *end != 0 ||
+        parsed < 0 || parsed > MAX_RETRIES) {
+        die("Invalid retries: %s (expected 0-%d)", value, MAX_RETRIES);
+    }
+    return (int)parsed;
+}
 
 void options_parse(options_t* opts, int argc, char** argv) {
     memset(opts, 0, sizeof(options_t));
@@ -64,8 +78,10 @@ void options_parse(options_t* opts, int argc, char** argv) {
             if (opts->timeout_sec < 1) opts->timeout_sec = 1;
         }
         else if (strcmp(argv[i], "--retries") == 0 && i+1 < argc) {
-            opts->max_retries = atoi(argv[++i]);
-            if (opts->max_retries < 0) opts->max_retries = 0;
+            opts->max_retries = parse_retries(argv[++i]);
+        }
+        else if (strncmp(argv[i], "--retries=", 10) == 0) {
+            opts->max_retries = parse_retries(argv[i] + 10);
         }
         else if (strcmp(argv[i], "--checksum") == 0 && i+1 < argc) {
             strncpy(opts->checksum, argv[++i], sizeof(opts->checksum) - 1);
@@ -89,8 +105,7 @@ void options_parse(options_t* opts, int argc, char** argv) {
             die("Unknown option: %s. Use -h for help.", argv[i]);
         }
         else {
-            if (opts->url[0] == 0)
-                strncpy(opts->url, argv[i], sizeof(opts->url) - 1);
+            add_url_option(opts, argv[i]);
         }
     }
 }
@@ -98,6 +113,15 @@ static void set_proxy_option(proxy_endpoint_t* dst, const char* value) {
     char err[256] = {0};
     if (http_proxy_parse(value, dst, err, sizeof(err)) != 0)
         die("%s", err);
+}
+
+static void add_url_option(options_t* opts, const char* value) {
+    if (opts->url_count >= MAX_DOWNLOAD_SOURCES)
+        die("Too many URLs (max %d)", MAX_DOWNLOAD_SOURCES);
+    snprintf(opts->urls[opts->url_count], HTTP_MAX_URL, "%s", value);
+    if (opts->url_count == 0)
+        snprintf(opts->url, sizeof(opts->url), "%s", value);
+    opts->url_count++;
 }
 
 static char* trim_token_quotes(char* s) {
@@ -208,11 +232,9 @@ static void parse_embedded_args(options_t* opts, char* arg_tail) {
             opts->timeout_sec = atoi(trim_token_quotes(tok + 10));
             if (opts->timeout_sec < 1) opts->timeout_sec = 1;
         } else if (strcmp(tok, "--retries") == 0 && i + 1 < count) {
-            opts->max_retries = atoi(trim_token_quotes(tokens[++i]));
-            if (opts->max_retries < 0) opts->max_retries = 0;
+            opts->max_retries = parse_retries(trim_token_quotes(tokens[++i]));
         } else if (strncmp(tok, "--retries=", 10) == 0) {
-            opts->max_retries = atoi(trim_token_quotes(tok + 10));
-            if (opts->max_retries < 0) opts->max_retries = 0;
+            opts->max_retries = parse_retries(trim_token_quotes(tok + 10));
         } else if (strcmp(tok, "--checksum") == 0 && i + 1 < count) {
             strncpy(opts->checksum, trim_token_quotes(tokens[++i]), sizeof(opts->checksum) - 1);
             opts->checksum[sizeof(opts->checksum) - 1] = 0;
@@ -241,9 +263,8 @@ static void parse_embedded_args(options_t* opts, char* arg_tail) {
             opts->proxy.no_proxy[sizeof(opts->proxy.no_proxy) - 1] = 0;
         } else if (strcmp(tok, "-q") == 0 || strcmp(tok, "--quiet") == 0) {
             opts->quiet = true;
-        } else if (tok[0] != '-' && opts->url[0] == 0) {
-            strncpy(opts->url, tok, sizeof(opts->url) - 1);
-            opts->url[sizeof(opts->url) - 1] = 0;
+        } else if (tok[0] != '-') {
+            add_url_option(opts, tok);
         }
     }
 }
@@ -262,7 +283,7 @@ static void split_embedded_args(options_t* opts, char* value) {
 void options_print_help(void) {
     printf("大侠阿木：daxiaamu.com\n");
     printf("MUDL - Multi-threaded Universal Downloader\n");
-    printf("Usage: mudl [options] <URL>\n\n");
+    printf("Usage: mudl [options] <URL> [URL...]\n\n");
     printf("Options:\n");
     printf("  -o,  --output <FILE>      Output filename\n");
     printf("  -d,  --dir <DIR>          Output directory\n");
@@ -273,7 +294,8 @@ void options_print_help(void) {
     printf("       --referer <URL>      Referer\n");
     printf("       --header <K:V>       Custom HTTP header (repeatable)\n");
     printf("       --timeout <SEC>      Timeout (default %d)\n", DEFAULT_TIMEOUT);
-    printf("       --retries <N>        Retries (default %d)\n", DEFAULT_RETRY);
+    printf("       --retries <N>        Retries after failure (default %d, max %d)\n",
+           DEFAULT_RETRY, MAX_RETRIES);
     printf("       --checksum <TYPE=DIGEST> Verify file checksum after download\n");
     printf("       --proxy <PROXY>      Alias for --all-proxy\n");
     printf("       --all-proxy <PROXY>  Proxy for all HTTP(S) downloads\n");
@@ -285,6 +307,7 @@ void options_print_help(void) {
     printf("Examples:\n");
     printf("  mudl https://example.com/file.zip\n");
     printf("  mudl -c 8 https://example.com/large.iso\n");
+    printf("  mudl https://host/file.zip https://mirror/file.zip\n");
     printf("  mudl -q -p json https://example.com/file.bin\n");
 }
 void options_print_version(void) {
