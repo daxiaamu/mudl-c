@@ -1,6 +1,26 @@
 # MUDL-C
 
 [![CI](https://github.com/daxiaamu/mudl-c/actions/workflows/ci.yml/badge.svg)](https://github.com/daxiaamu/mudl-c/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/daxiaamu/mudl-c?display_name=tag&sort=semver)](https://github.com/daxiaamu/mudl-c/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/daxiaamu/mudl-c/total)](https://github.com/daxiaamu/mudl-c/releases)
+[![License](https://img.shields.io/github/license/daxiaamu/mudl-c)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/daxiaamu/mudl-c?style=flat)](https://github.com/daxiaamu/mudl-c/stargazers)
+[![Forks](https://img.shields.io/github/forks/daxiaamu/mudl-c?style=flat)](https://github.com/daxiaamu/mudl-c/forks)
+[![Issues](https://img.shields.io/github/issues/daxiaamu/mudl-c)](https://github.com/daxiaamu/mudl-c/issues)
+[![Last Commit](https://img.shields.io/github/last-commit/daxiaamu/mudl-c)](https://github.com/daxiaamu/mudl-c/commits/main)
+[![Contributors](https://img.shields.io/github/contributors/daxiaamu/mudl-c)](https://github.com/daxiaamu/mudl-c/graphs/contributors)
+[![Repo Size](https://img.shields.io/github/repo-size/daxiaamu/mudl-c)](https://github.com/daxiaamu/mudl-c)
+
+![C](https://img.shields.io/badge/language-C11-00599C?logo=c&logoColor=white)
+![Windows](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)
+![Windows 7+](https://img.shields.io/badge/compatibility-Windows%207%2B-0078D6)
+![Architecture](https://img.shields.io/badge/architecture-x86%20%7C%20x64-555555)
+![SChannel](https://img.shields.io/badge/TLS-SChannel-2F6DB0)
+![HTTP](https://img.shields.io/badge/protocol-HTTP%20%7C%20HTTPS-2EA44F)
+![Connections](https://img.shields.io/badge/connections-up%20to%2032-FF8C00)
+![Mirrors](https://img.shields.io/badge/mirror%20sources-up%20to%2016-8A2BE2)
+![Dependencies](https://img.shields.io/badge/runtime%20dependencies-none-success)
+![CLI](https://img.shields.io/badge/interface-CLI-black)
 
 See [CHANGELOG.md](CHANGELOG.md) for release history.
 
@@ -9,6 +29,8 @@ a `mudl-windows-x64` artifact, and CI can also be started manually from the
 Actions page.
 
 > **Nano CLI download manager for Windows** - a small, dependency-free C downloader built on Win32 and SChannel.
+
+[【机场推荐：白月光，稳定高速】](https://www.sibker.com/register?invite_code=2XQR1UUz)
 
 ## Features
 
