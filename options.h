@@ -8,7 +8,7 @@
 #include "progress.h"
 #include "source.h"
 
-#define MUDL_VERSION "0.5.13"
+#define MUDL_VERSION "0.5.14"
 #define DEFAULT_CONNECTIONS 8
 #define DEFAULT_TIMEOUT 30
 #define DEFAULT_RETRY 5

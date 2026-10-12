@@ -30,25 +30,68 @@ static bool adapter_name_matches(const IP_ADAPTER_ADDRESSES* adapter,
     return false;
 }
 
+static bool address_matches(const struct sockaddr* left,
+                            const struct sockaddr* right) {
+    if (!left || !right || left->sa_family != right->sa_family)
+        return false;
+    if (left->sa_family == AF_INET) {
+        const struct sockaddr_in* a = (const struct sockaddr_in*)left;
+        const struct sockaddr_in* b = (const struct sockaddr_in*)right;
+        return a->sin_addr.s_addr == b->sin_addr.s_addr;
+    }
+    if (left->sa_family == AF_INET6) {
+        const struct sockaddr_in6* a = (const struct sockaddr_in6*)left;
+        const struct sockaddr_in6* b = (const struct sockaddr_in6*)right;
+        return memcmp(&a->sin6_addr, &b->sin6_addr,
+                      sizeof(a->sin6_addr)) == 0;
+    }
+    return false;
+}
+
+static int set_outgoing_interface(SOCKET fd, int family,
+                                  const IP_ADAPTER_ADDRESSES* adapter,
+                                  const char* interface_name,
+                                  char* err, int err_n) {
+    DWORD index;
+    int level;
+    int option;
+    if (family == AF_INET) {
+        index = htonl(adapter->IfIndex);
+        level = IPPROTO_IP;
+        option = IP_UNICAST_IF;
+    } else {
+        index = adapter->Ipv6IfIndex;
+        level = IPPROTO_IPV6;
+        option = IPV6_UNICAST_IF;
+    }
+
+    if (setsockopt(fd, level, option, (const char*)&index, sizeof(index)) == 0)
+        return 0;
+
+    _snprintf(err, err_n,
+              "Cannot select outgoing interface %s (WinSock %d)",
+              interface_name, WSAGetLastError());
+    return -1;
+}
+
 int network_bind_interface(SOCKET fd, int family, const char* interface_name,
                            char* err, int err_n) {
     if (!interface_name || !interface_name[0])
         return 0;
 
+    struct sockaddr_storage requested;
+    memset(&requested, 0, sizeof(requested));
+    bool numeric_address = false;
     if (family == AF_INET) {
-        struct sockaddr_in local;
-        memset(&local, 0, sizeof(local));
-        local.sin_family = AF_INET;
-        if (InetPtonA(AF_INET, interface_name, &local.sin_addr) == 1)
-            return bind_address(fd, (const struct sockaddr*)&local,
-                                sizeof(local), interface_name, err, err_n);
+        struct sockaddr_in* local = (struct sockaddr_in*)&requested;
+        local->sin_family = AF_INET;
+        numeric_address = InetPtonA(AF_INET, interface_name,
+                                    &local->sin_addr) == 1;
     } else if (family == AF_INET6) {
-        struct sockaddr_in6 local;
-        memset(&local, 0, sizeof(local));
-        local.sin6_family = AF_INET6;
-        if (InetPtonA(AF_INET6, interface_name, &local.sin6_addr) == 1)
-            return bind_address(fd, (const struct sockaddr*)&local,
-                                sizeof(local), interface_name, err, err_n);
+        struct sockaddr_in6* local = (struct sockaddr_in6*)&requested;
+        local->sin6_family = AF_INET6;
+        numeric_address = InetPtonA(AF_INET6, interface_name,
+                                    &local->sin6_addr) == 1;
     }
 
     int wide_len = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
@@ -97,13 +140,34 @@ int network_bind_interface(SOCKET fd, int family, const char* interface_name,
     bool address_found = false;
     for (IP_ADAPTER_ADDRESSES* adapter = adapters; adapter;
          adapter = adapter->Next) {
-        if (!adapter_name_matches(adapter, interface_name, wide_name))
+        bool adapter_matches = !numeric_address &&
+            adapter_name_matches(adapter, interface_name, wide_name);
+        if (numeric_address) {
+            for (IP_ADAPTER_UNICAST_ADDRESS* unicast = adapter->FirstUnicastAddress;
+                 unicast; unicast = unicast->Next) {
+                if (address_matches(unicast->Address.lpSockaddr,
+                                    (const struct sockaddr*)&requested)) {
+                    adapter_matches = true;
+                    break;
+                }
+            }
+        }
+        if (!adapter_matches)
             continue;
         matched = true;
+
+        if (set_outgoing_interface(fd, family, adapter, interface_name,
+                                   err, err_n) != 0)
+            goto done;
+
         for (IP_ADAPTER_UNICAST_ADDRESS* unicast = adapter->FirstUnicastAddress;
              unicast; unicast = unicast->Next) {
             if (!unicast->Address.lpSockaddr ||
                 unicast->Address.lpSockaddr->sa_family != family)
+                continue;
+            if (numeric_address &&
+                !address_matches(unicast->Address.lpSockaddr,
+                                 (const struct sockaddr*)&requested))
                 continue;
             address_found = true;
             result = bind_address(fd, unicast->Address.lpSockaddr,
@@ -114,7 +178,10 @@ int network_bind_interface(SOCKET fd, int family, const char* interface_name,
         }
     }
 
-    if (matched && !address_found)
+    if (numeric_address && !matched)
+        _snprintf(err, err_n, "Local interface address not found: %s",
+                  interface_name);
+    else if (matched && !address_found)
         _snprintf(err, err_n, "Interface %s has no compatible local address",
                   interface_name);
     else if (!matched)

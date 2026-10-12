@@ -2,6 +2,16 @@
 
 All notable changes to MUDL-C are documented in this file.
 
+## [0.5.14] - 2026-10-13
+
+### Fixed
+
+- Made `--interface` select the Windows outgoing interface with
+  `IP_UNICAST_IF` in addition to binding its local address, preventing another
+  lower-metric default route from taking over on multihomed systems.
+- Added direct tests that read the selected interface index back from the
+  socket for both IP-address and Windows adapter-name forms.
+
 ## [0.5.13] - 2026-10-13
 
 ### Added
@@ -91,6 +101,7 @@ All notable changes to MUDL-C are documented in this file.
 - Resume speed reporting and final summaries to follow aria2-style semantics.
 - Early EOF, disk short-write, and malformed partial-response handling.
 
+[0.5.14]: https://github.com/daxiaamu/mudl-c/compare/v0.5.13...v0.5.14
 [0.5.13]: https://github.com/daxiaamu/mudl-c/compare/v0.5.12...v0.5.13
 [0.5.12]: https://github.com/daxiaamu/mudl-c/compare/v0.5.11...v0.5.12
 [0.5.11]: https://github.com/daxiaamu/mudl-c/compare/v0.5.10...v0.5.11

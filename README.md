@@ -217,8 +217,10 @@ mudl --interface 25G2 --proxy 192.168.30.226:7890 "https://example.com/file.zip"
 Adapter names are the names shown by Windows under Network Connections. Names
 containing spaces or non-ASCII characters must be quoted. MUDL binds every
 probe, redirect, retry, source check, and worker connection to the selected
-interface. When a proxy is configured, the interface controls the connection
-to the proxy.
+interface. On Windows, it sets the socket's outgoing interface index and binds
+the corresponding local address, so another default route cannot silently take
+over the connection. When a proxy is configured, the interface controls the
+connection to the proxy.
 
 ## Project Structure
 

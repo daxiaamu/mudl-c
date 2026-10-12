@@ -47,6 +47,11 @@ static void test_adapter_name(void) {
     SOCKET fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     assert(fd != INVALID_SOCKET);
     assert(network_bind_interface(fd, AF_INET, name, err, sizeof(err)) == 0);
+    DWORD interface_index = 0;
+    int option_len = sizeof(interface_index);
+    assert(getsockopt(fd, IPPROTO_IP, IP_UNICAST_IF,
+                      (char*)&interface_index, &option_len) == 0);
+    assert(interface_index == selected->IfIndex);
     closesocket(fd);
 
     free(name);
@@ -68,6 +73,11 @@ int main(void) {
     memset(&local, 0, sizeof(local));
     assert(getsockname(fd, (struct sockaddr*)&local, &local_len) == 0);
     assert(local.sin_addr.s_addr == htonl(INADDR_LOOPBACK));
+    DWORD interface_index = 0;
+    int option_len = sizeof(interface_index);
+    assert(getsockopt(fd, IPPROTO_IP, IP_UNICAST_IF,
+                      (char*)&interface_index, &option_len) == 0);
+    assert(interface_index != 0);
     closesocket(fd);
 
     fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
