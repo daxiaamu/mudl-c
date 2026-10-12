@@ -15,5 +15,6 @@ test_*
 !tests/test_segment.c
 !tests/test_options.c
 !tests/test_url.c
+!tests/test_network.c
 .DS_Store
 Thumbs.db

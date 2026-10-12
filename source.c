@@ -18,7 +18,8 @@ static int fetch_sample(char* url, int url_n, int64_t start, int64_t end,
                         int64_t expected_size, int timeout_sec,
                         const char* user_agent, const char* referer,
                         const char** extra_headers, int extra_count,
-                        const proxy_config_t* proxy, uint32_t* crc,
+                        const proxy_config_t* proxy, const char* interface_name,
+                        uint32_t* crc,
                         int* sample_length, char* validator, int validator_n,
                         char* path_out, int path_n, int64_t* total_size,
                         char* err, int err_n) {
@@ -35,7 +36,8 @@ static int fetch_sample(char* url, int url_n, int64_t start, int64_t end,
         }
 
         http_client_t http;
-        if (http_connect(&http, current, timeout_sec, proxy) != 0) {
+        if (http_connect(&http, current, timeout_sec, proxy,
+                         interface_name) != 0) {
             snprintf(err, err_n, "%s", http.last_error);
             return -1;
         }
@@ -118,6 +120,7 @@ int source_probe(download_source_t* source, const char* url,
                  int timeout_sec, const char* user_agent,
                  const char* referer, const char** extra_headers,
                  int extra_count, const proxy_config_t* proxy,
+                 const char* interface_name,
                  char* err, int err_n) {
     memset(source, 0, sizeof(*source));
     snprintf(source->url, sizeof(source->url), "%s", url);
@@ -126,7 +129,7 @@ int source_probe(download_source_t* source, const char* url,
     if (fetch_sample(source->url, sizeof(source->url), 0,
                      SOURCE_SAMPLE_SIZE - 1, 0, timeout_sec,
                      user_agent, referer, extra_headers, extra_count,
-                     proxy, &source->first_crc32,
+                     proxy, interface_name, &source->first_crc32,
                      &source->first_length, source->validator,
                      sizeof(source->validator), source->path,
                      sizeof(source->path), &total, err, err_n) != 0)
@@ -141,7 +144,7 @@ int source_probe(download_source_t* source, const char* url,
     if (fetch_sample(source->url, sizeof(source->url), last_start,
                      source->file_size - 1, source->file_size,
                      timeout_sec, user_agent, referer,
-                     extra_headers, extra_count, proxy,
+                     extra_headers, extra_count, proxy, interface_name,
                      &source->last_crc32, &source->last_length,
                      last_validator, sizeof(last_validator),
                      last_path, sizeof(last_path), &last_total,

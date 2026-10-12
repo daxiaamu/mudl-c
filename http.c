@@ -4,6 +4,7 @@
 
 #include "http.h"
 #include "url.h"
+#include "network.h"
 #include "schannel.h"
 #include "utils.h"
 #include <stdio.h>
@@ -166,7 +167,7 @@ void http_global_cleanup(void) {
 }
 
 int http_connect(http_client_t* cli, const char* url, int timeout_sec,
-                 const proxy_config_t* proxy) {
+                 const proxy_config_t* proxy, const char* interface_name) {
     memset(cli, 0, sizeof(http_client_t));
     cli->timeout_sec = timeout_sec > 0 ? timeout_sec : 30;
 
@@ -213,6 +214,14 @@ int http_connect(http_client_t* cli, const char* url, int timeout_sec,
         freeaddrinfo(result);
         _snprintf(cli->last_error, sizeof(cli->last_error),
                   "Socket creation failed: %d", WSAGetLastError());
+        return -1;
+    }
+
+    if (network_bind_interface(cli->fd, result->ai_family, interface_name,
+                               cli->last_error, sizeof(cli->last_error)) != 0) {
+        freeaddrinfo(result);
+        closesocket(cli->fd);
+        cli->fd = INVALID_SOCKET;
         return -1;
     }
 

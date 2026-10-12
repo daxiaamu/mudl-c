@@ -77,7 +77,7 @@ int http_global_init(void);
 void http_global_cleanup(void);
 int http_proxy_parse(const char* proxy, proxy_endpoint_t* out, char* err, int err_n);
 int http_connect(http_client_t* cli, const char* url, int timeout_sec,
-                 const proxy_config_t* proxy);
+                 const proxy_config_t* proxy, const char* interface_name);
 int http_request(http_client_t* cli, http_method_t method,
                  const char* path, const char* range_start,
                  const char* range_end, const char* ua,

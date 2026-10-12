@@ -70,7 +70,8 @@ static int download_from_source(worker_ctx_t* ctx, segment_t* seg,
     snprintf(range_end, sizeof(range_end), "%lld", (long long)seg->end_offset);
 
     http_client_t http;
-    if (http_connect(&http, source->url, ctx->timeout_sec, ctx->proxy) != 0) {
+    if (http_connect(&http, source->url, ctx->timeout_sec, ctx->proxy,
+                     ctx->interface_name) != 0) {
         source_failure(source, false, ctx->source_count > 1,
                        tid, source_index, http.last_error);
         http_close(&http);

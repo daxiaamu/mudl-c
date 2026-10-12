@@ -71,12 +71,30 @@ static void test_retry_limits(void) {
     assert(maximum.max_retries == MAX_RETRIES);
 }
 
+static void test_interface_option(void) {
+    options_t address, name;
+    char* address_argv[] = {
+        "mudl", "--interface", "192.168.1.20", "https://example.com/a"
+    };
+    char* name_argv[] = {
+        "mudl", "--interface=以太网 2", "https://example.com/b"
+    };
+    options_parse(&address,
+                  (int)(sizeof(address_argv) / sizeof(address_argv[0])),
+                  address_argv);
+    options_parse(&name, (int)(sizeof(name_argv) / sizeof(name_argv[0])),
+                  name_argv);
+    assert(strcmp(address.interface_name, "192.168.1.20") == 0);
+    assert(strcmp(name.interface_name, "以太网 2") == 0);
+}
+
 int main(void) {
     test_url_after_options();
     test_merged_trailing_backslash_arguments();
     test_connection_limits();
     test_multiple_source_urls();
     test_retry_limits();
+    test_interface_option();
     puts("option unit tests passed");
     return 0;
 }

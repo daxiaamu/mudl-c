@@ -8,7 +8,7 @@
 #include "progress.h"
 #include "source.h"
 
-#define MUDL_VERSION "0.5.12"
+#define MUDL_VERSION "0.5.13"
 #define DEFAULT_CONNECTIONS 8
 #define DEFAULT_TIMEOUT 30
 #define DEFAULT_RETRY 5
@@ -30,6 +30,7 @@ typedef struct {
     char*       extra_headers[32];
     int         extra_count;
     proxy_config_t proxy;
+    char        interface_name[256];
     char        checksum[256];
     char        resource_validator[256];
     bool        help;

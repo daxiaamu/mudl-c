@@ -90,9 +90,9 @@ Manual build:
 
 ```bash
 x86_64-w64-mingw32-gcc -std=c11 -O2 -Wall -Wextra -mconsole \
-  -o mudl.exe main.c options.c engine.c http.c url.c source.c schannel.c file_io.c progress.c utils.c \
+  -o mudl.exe main.c options.c engine.c http.c network.c url.c source.c schannel.c file_io.c progress.c utils.c \
   segment.c thread_pool.c persist.c checksum.c \
-  -lws2_32 -lshlwapi -lsecur32 -lshell32 -ladvapi32
+  -lws2_32 -liphlpapi -lshlwapi -lsecur32 -lshell32 -ladvapi32
 strip mudl.exe
 ```
 
@@ -109,12 +109,13 @@ strip mudl.exe
        --header <K:V>       Custom HTTP header (repeatable)
        --timeout <SEC>      Connection timeout (default 30)
        --retries <N>        Retries after failure (default 5, max 100)
-       --checksum <TYPE=DIGEST> Verify file checksum after download
-       --proxy <PROXY>      Alias for --all-proxy
-       --all-proxy <PROXY>  Proxy for all HTTP(S) downloads
-       --http-proxy <PROXY> Proxy for HTTP downloads
-       --https-proxy <PROXY> Proxy for HTTPS downloads
-       --no-proxy <LIST>    Comma-separated hosts/domains/IP ranges
+       --checksum <TYPE=DIGEST>  Verify file checksum after download
+       --proxy <PROXY>           Alias for --all-proxy
+       --all-proxy <PROXY>       Proxy for all HTTP(S) downloads
+       --http-proxy <PROXY>      Proxy for HTTP downloads
+       --https-proxy <PROXY>     Proxy for HTTPS downloads
+       --no-proxy <LIST>         Comma-separated hosts/domains/IP ranges
+       --interface <IP|NAME>     Bind connections to a local interface
   -h,  --help               Show help
   -V,  --version            Show version
 ```
@@ -192,6 +193,23 @@ Proxy options:
 
 HTTPS downloads through an HTTP proxy use `CONNECT` tunneling. TLS is still handled by Windows SChannel after the proxy tunnel is established.
 
+## Network Interface
+
+Use `--interface` to select the local network path for every connection. It
+accepts either a local IPv4 address or a Windows adapter name:
+
+```bash
+mudl --interface 192.168.30.191 "https://example.com/file.zip"
+mudl --interface "以太网" "https://example.com/file.zip"
+mudl --interface 25G2 --proxy 192.168.30.226:7890 "https://example.com/file.zip"
+```
+
+Adapter names are the names shown by Windows under Network Connections. Names
+containing spaces or non-ASCII characters must be quoted. MUDL binds every
+probe, redirect, retry, source check, and worker connection to the selected
+interface. When a proxy is configured, the interface controls the connection
+to the proxy.
+
 ## Project Structure
 
 ```text
@@ -201,6 +219,7 @@ engine.c / .h     Download probing, orchestration, and completion checks
 url.c / .h        URL, proxy, and no-proxy parsing
 source.c / .h     Mirror probing, identity sampling, and source state
 http.c / .h       HTTP request, response, and transport orchestration
+network.c / .h    Local IP and Windows network-adapter binding
 schannel.c / .h   Windows SChannel TLS handshake and encrypted I/O
 file_io.c / .h    Thread-safe file I/O and UTF-8 path handling
 segment.c / .h    Segment manager

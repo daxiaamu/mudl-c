@@ -72,7 +72,8 @@ static int prepare_sources(options_t* opts, download_source_t* sources,
         if (source_probe(&candidate, opts->urls[i], opts->timeout_sec,
                          opts->user_agent, opts->referer,
                          (const char**)opts->extra_headers, opts->extra_count,
-                         &opts->proxy, err, sizeof(err)) != 0) {
+                         &opts->proxy, opts->interface_name,
+                         err, sizeof(err)) != 0) {
             infof(opts, "Source %d unavailable: %s\n", i + 1, err);
             continue;
         }
@@ -117,7 +118,10 @@ int engine_run(const options_t* options) {
     if (opts.url_count > 1)
         infof(&opts, "Sources: %d\n", opts.url_count);
     infof(&opts, "Output:  %s\n", outpath);
-    infof(&opts, "Threads: %d\n\n", opts.connections);
+    infof(&opts, "Threads: %d\n", opts.connections);
+    if (opts.interface_name[0])
+        infof(&opts, "Interface: %s\n", opts.interface_name);
+    infof(&opts, "\n");
 
     char scheme[16], host[256], path[HTTP_MAX_PATH];
     int port;
@@ -147,7 +151,8 @@ int engine_run(const options_t* options) {
     http_client_t probe;
     http_response_t probe_resp;
 
-    if (http_connect(&probe, opts.url, opts.timeout_sec, &opts.proxy) != 0) {
+    if (http_connect(&probe, opts.url, opts.timeout_sec, &opts.proxy,
+                     opts.interface_name) != 0) {
         fprintf(stderr, "Error: %s\n", probe.last_error);
         http_global_cleanup();
         return 1;
@@ -170,7 +175,8 @@ int engine_run(const options_t* options) {
         http_close(&probe);
 
         snprintf(opts.url, sizeof(opts.url), "%s", probe_resp.location);
-        if (http_connect(&probe, opts.url, opts.timeout_sec, &opts.proxy) != 0) {
+        if (http_connect(&probe, opts.url, opts.timeout_sec, &opts.proxy,
+                         opts.interface_name) != 0) {
             fprintf(stderr, "Redirect error: %s\n", probe.last_error);
             http_global_cleanup();
             return 1;
@@ -312,7 +318,8 @@ static int download_single(options_t* opts, const char* outpath,
 
 retry_download:;
     http_client_t cli;
-    if (http_connect(&cli, opts->url, opts->timeout_sec, &opts->proxy) != 0) {
+    if (http_connect(&cli, opts->url, opts->timeout_sec, &opts->proxy,
+                     opts->interface_name) != 0) {
         char reason[256];
         snprintf(reason, sizeof(reason), "%s", cli.last_error);
         http_close(&cli);
@@ -371,7 +378,8 @@ retry_download:;
                        host, sizeof(host), &port, path_new, sizeof(path_new));
         snprintf(path, HTTP_MAX_PATH, "%s", path_new);
 
-        if (http_connect(&cli, opts->url, opts->timeout_sec, &opts->proxy) != 0) {
+        if (http_connect(&cli, opts->url, opts->timeout_sec, &opts->proxy,
+                         opts->interface_name) != 0) {
             char reason[256];
             snprintf(reason, sizeof(reason), "redirect: %.245s", cli.last_error);
             file_close(&f);
@@ -706,6 +714,7 @@ static int download_multi(options_t* opts, const char* outpath,
     base_ctx.extra_count = opts->extra_count;
     base_ctx.timeout_sec = opts->timeout_sec;
     base_ctx.proxy = &opts->proxy;
+    base_ctx.interface_name = opts->interface_name;
     base_ctx.segmgr = &segmgr;
     base_ctx.output_file = &output_file;
     base_ctx.interrupted = &g_interrupted;

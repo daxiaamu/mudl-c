@@ -101,6 +101,13 @@ void options_parse(options_t* opts, int argc, char** argv) {
         else if (strcmp(argv[i], "--no-proxy") == 0 && i+1 < argc) {
             strncpy(opts->proxy.no_proxy, argv[++i], sizeof(opts->proxy.no_proxy) - 1);
         }
+        else if (strcmp(argv[i], "--interface") == 0 && i+1 < argc) {
+            strncpy(opts->interface_name, argv[++i], sizeof(opts->interface_name) - 1);
+        }
+        else if (strncmp(argv[i], "--interface=", 12) == 0) {
+            strncpy(opts->interface_name, argv[i] + 12,
+                    sizeof(opts->interface_name) - 1);
+        }
         else if (argv[i][0] == '-') {
             die("Unknown option: %s. Use -h for help.", argv[i]);
         }
@@ -261,6 +268,14 @@ static void parse_embedded_args(options_t* opts, char* arg_tail) {
         } else if (strncmp(tok, "--no-proxy=", 11) == 0) {
             strncpy(opts->proxy.no_proxy, trim_token_quotes(tok + 11), sizeof(opts->proxy.no_proxy) - 1);
             opts->proxy.no_proxy[sizeof(opts->proxy.no_proxy) - 1] = 0;
+        } else if (strcmp(tok, "--interface") == 0 && i + 1 < count) {
+            strncpy(opts->interface_name, trim_token_quotes(tokens[++i]),
+                    sizeof(opts->interface_name) - 1);
+            opts->interface_name[sizeof(opts->interface_name) - 1] = 0;
+        } else if (strncmp(tok, "--interface=", 12) == 0) {
+            strncpy(opts->interface_name, trim_token_quotes(tok + 12),
+                    sizeof(opts->interface_name) - 1);
+            opts->interface_name[sizeof(opts->interface_name) - 1] = 0;
         } else if (strcmp(tok, "-q") == 0 || strcmp(tok, "--quiet") == 0) {
             opts->quiet = true;
         } else if (tok[0] != '-') {
@@ -296,12 +311,13 @@ void options_print_help(void) {
     printf("       --timeout <SEC>      Timeout (default %d)\n", DEFAULT_TIMEOUT);
     printf("       --retries <N>        Retries after failure (default %d, max %d)\n",
            DEFAULT_RETRY, MAX_RETRIES);
-    printf("       --checksum <TYPE=DIGEST> Verify file checksum after download\n");
-    printf("       --proxy <PROXY>      Alias for --all-proxy\n");
-    printf("       --all-proxy <PROXY>  Proxy for all HTTP(S) downloads\n");
-    printf("       --http-proxy <PROXY> Proxy for HTTP downloads\n");
-    printf("       --https-proxy <PROXY> Proxy for HTTPS downloads\n");
-    printf("       --no-proxy <LIST>    Comma-separated hosts/domains/IP ranges\n");
+    printf("       --checksum <TYPE=DIGEST>  Verify file checksum after download\n");
+    printf("       --proxy <PROXY>           Alias for --all-proxy\n");
+    printf("       --all-proxy <PROXY>       Proxy for all HTTP(S) downloads\n");
+    printf("       --http-proxy <PROXY>      Proxy for HTTP downloads\n");
+    printf("       --https-proxy <PROXY>     Proxy for HTTPS downloads\n");
+    printf("       --no-proxy <LIST>         Comma-separated hosts/domains/IP ranges\n");
+    printf("       --interface <IP|NAME>     Bind connections to a local interface\n");
     printf("  -h,  --help               Show help\n");
     printf("  -V,  --version            Show version\n\n");
     printf("Examples:\n");

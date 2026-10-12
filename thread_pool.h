@@ -22,6 +22,7 @@ typedef struct {
     int          extra_count;
     int          timeout_sec;
     const proxy_config_t* proxy;
+    const char*  interface_name;
     segment_manager_t* segmgr;
     file_t*      output_file;
     volatile bool* interrupted;

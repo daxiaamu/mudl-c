@@ -3,8 +3,8 @@ HOST ?= x86_64-w64-mingw32
 CC = $(HOST)-gcc
 CFLAGS = -std=c11 -O2 -Wall -Wextra -Wno-unused-parameter -Wno-stringop-truncation -Wno-implicit-fallthrough -DWIN32_LEAN_AND_MEAN -D_WIN32_WINNT=0x0600 -D__USE_MINGW_ANSI_STDIO=1 -mconsole
 DEPFLAGS = -MMD -MP
-LDFLAGS = -lws2_32 -lshlwapi -lsecur32 -lshell32 -ladvapi32
-SRCS = main.c options.c engine.c http.c url.c source.c schannel.c file_io.c progress.c utils.c segment.c thread_pool.c persist.c checksum.c
+LDFLAGS = -lws2_32 -liphlpapi -lshlwapi -lsecur32 -lshell32 -ladvapi32
+SRCS = main.c options.c engine.c http.c network.c url.c source.c schannel.c file_io.c progress.c utils.c segment.c thread_pool.c persist.c checksum.c
 OBJS = $(SRCS:.c=.o)
 DEPS = $(OBJS:.o=.d)
 TARGET = mudl.exe
@@ -37,6 +37,8 @@ unit-test:
 	./tests/test_options.exe
 	$(CC) $(CFLAGS) -I. -o tests/test_url.exe tests/test_url.c url.c -lws2_32
 	./tests/test_url.exe
+	$(CC) $(CFLAGS) -I. -o tests/test_network.exe tests/test_network.c network.c -lws2_32 -liphlpapi
+	./tests/test_network.exe
 
 integration-test: $(TARGET)
 	python tests/test_integration.py

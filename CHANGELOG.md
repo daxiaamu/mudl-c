@@ -2,6 +2,20 @@
 
 All notable changes to MUDL-C are documented in this file.
 
+## [0.5.13] - 2026-10-13
+
+### Added
+
+- Added `--interface <IP|NAME>` to bind all download connections to a local
+  IPv4 address or Windows network-adapter name.
+- Added interface-binding unit and integration coverage.
+
+### Fixed
+
+- Fixed HTTPS downloads through HTTP proxies waiting past the end of the
+  `CONNECT` response and potentially feeding proxy response bytes into the TLS
+  handshake.
+
 ## [0.5.12] - 2026-07-14
 
 ### Added
@@ -77,6 +91,7 @@ All notable changes to MUDL-C are documented in this file.
 - Resume speed reporting and final summaries to follow aria2-style semantics.
 - Early EOF, disk short-write, and malformed partial-response handling.
 
+[0.5.13]: https://github.com/daxiaamu/mudl-c/compare/v0.5.12...v0.5.13
 [0.5.12]: https://github.com/daxiaamu/mudl-c/compare/v0.5.11...v0.5.12
 [0.5.11]: https://github.com/daxiaamu/mudl-c/compare/v0.5.10...v0.5.11
 [0.5.10]: https://github.com/daxiaamu/mudl-c/compare/v0.5.9...v0.5.10

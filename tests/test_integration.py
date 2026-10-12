@@ -176,8 +176,22 @@ def main():
             assert hashlib.sha256((temp / "range.bin").read_bytes()).digest() == expected
 
             result = run(
+                mudl, temp, base + "/range", "interface-range.bin",
+                "-c", "2", "--interface", "127.0.0.1")
+            assert result.returncode == 0, result.stderr.decode(errors="replace")
+            assert hashlib.sha256(
+                (temp / "interface-range.bin").read_bytes()).digest() == expected
+
+            result = run(
+                mudl, temp, base + "/range", "bad-interface.bin",
+                "--interface", "missing-interface-for-test")
+            assert result.returncode != 0
+            assert b"Network interface not found" in result.stderr
+
+            result = run(
                 mudl, temp, base + "/range", "proxy-range.bin",
-                "-c", "2", "--proxy", f"127.0.0.1:{proxy.server_port}")
+                "-c", "2", "--interface", "127.0.0.1",
+                "--proxy", f"127.0.0.1:{proxy.server_port}")
             assert result.returncode == 0, result.stderr.decode(errors="replace")
             assert HTTPProxy.seen, "HTTP proxy received no request"
             assert HTTPProxy.seen[0].startswith(base + "/range"), HTTPProxy.seen[0]
