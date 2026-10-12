@@ -32,6 +32,16 @@ Actions page.
 
 [【机场推荐：白月光，稳定高速】](https://www.sibker.com/register?invite_code=2XQR1UUz)
 
+## Download
+
+Download the latest stable release:
+
+- [mudl-windows-x64.exe](https://github.com/daxiaamu/mudl-c/releases/latest/download/mudl-windows-x64.exe) - 64-bit Windows, recommended for most users.
+- [mudl-windows-x86.exe](https://github.com/daxiaamu/mudl-c/releases/latest/download/mudl-windows-x86.exe) - 32-bit Windows; also runs on 64-bit Windows.
+- [SHA256SUMS.txt](https://github.com/daxiaamu/mudl-c/releases/latest/download/SHA256SUMS.txt) - SHA-256 checksums for both executables.
+
+The Release contains two executable builds, one for each architecture.
+
 ## Features
 
 | Feature | Description |
