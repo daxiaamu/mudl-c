@@ -5,6 +5,7 @@ import struct
 import subprocess
 import tempfile
 import threading
+import urllib.parse
 import zlib
 
 
@@ -117,6 +118,37 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
 
 
+class HTTPProxy(http.server.BaseHTTPRequestHandler):
+    seen = []
+
+    def log_message(self, *_args):
+        pass
+
+    def do_GET(self):
+        self.seen.append(self.path)
+        target = urllib.parse.urlsplit(self.path)
+        if target.scheme != "http" or target.path != "/range":
+            self.send_response(400)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
+        value = self.headers.get("Range", "bytes=0-")[6:]
+        start_text, end_text = value.split("-", 1)
+        start = int(start_text)
+        end = int(end_text) if end_text else len(DATA) - 1
+        body = DATA[start:end + 1]
+        self.send_response(206)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Range", f"bytes {start}-{end}/{len(DATA)}")
+        self.send_header("ETag", '"proxy-stable"')
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+
 def run(mudl, temp, url, name, *args, timeout=15):
     command = [str(mudl), "-d", str(temp), "-o", name,
                "--progress", "none", *args, url]
@@ -128,8 +160,11 @@ def main():
     mudl = root / "mudl.exe"
     expected = hashlib.sha256(DATA).digest()
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    proxy = http.server.ThreadingHTTPServer(("127.0.0.1", 0), HTTPProxy)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
+    proxy_thread = threading.Thread(target=proxy.serve_forever, daemon=True)
     thread.start()
+    proxy_thread.start()
     base = f"http://127.0.0.1:{server.server_port}"
 
     try:
@@ -139,6 +174,15 @@ def main():
             result = run(mudl, temp, base + "/range", "range.bin", "-c", "2")
             assert result.returncode == 0, result.stderr.decode(errors="replace")
             assert hashlib.sha256((temp / "range.bin").read_bytes()).digest() == expected
+
+            result = run(
+                mudl, temp, base + "/range", "proxy-range.bin",
+                "-c", "2", "--proxy", f"127.0.0.1:{proxy.server_port}")
+            assert result.returncode == 0, result.stderr.decode(errors="replace")
+            assert HTTPProxy.seen, "HTTP proxy received no request"
+            assert HTTPProxy.seen[0].startswith(base + "/range"), HTTPProxy.seen[0]
+            assert hashlib.sha256(
+                (temp / "proxy-range.bin").read_bytes()).digest() == expected
 
             command = [str(mudl), "-d", str(temp), "-o", "mirrors.bin",
                        "-c", "8", "--progress", "none",
@@ -365,6 +409,8 @@ def main():
     finally:
         server.shutdown()
         server.server_close()
+        proxy.shutdown()
+        proxy.server_close()
 
     print("integration tests passed")
 

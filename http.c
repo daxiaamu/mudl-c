@@ -285,7 +285,7 @@ static int http_recv_line(http_client_t* cli, char* buf, int buf_n) {
         if (buf[pos] == '\n') {
             buf[pos] = 0;
             if (pos > 0 && buf[pos-1] == '\r') buf[pos-1] = 0;
-            return pos;
+            return (int)strlen(buf);
         }
         pos++;
     }
