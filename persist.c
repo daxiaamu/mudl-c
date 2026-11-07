@@ -37,6 +37,14 @@ typedef struct {
 
 #define SEG_ENTRY_SIZE (sizeof(persist_segment_t))
 
+static int compare_segment_offsets(const void* a, const void* b) {
+    const segment_t* left = (const segment_t*)a;
+    const segment_t* right = (const segment_t*)b;
+    if (left->start_offset < right->start_offset) return -1;
+    if (left->start_offset > right->start_offset) return 1;
+    return 0;
+}
+
 static void persist_output_path(const char* seg_path, char* out_path, int out_path_n) {
     snprintf(out_path, out_path_n, "%s", seg_path);
     const char* suffix = ".segments";
@@ -120,27 +128,44 @@ int persist_save(const char* path, segment_manager_t* mgr, int64_t file_size,
 
     DWORD written;
 
+    /* Runtime work stealing appends split tails to keep active segment
+       pointers stable. Persist an ordered snapshot for strict resume checks. */
+    EnterCriticalSection(&mgr->lock);
+    int snapshot_count = mgr->segment_count;
+    segment_t* snapshot = (segment_t*)malloc(
+        (size_t)snapshot_count * sizeof(segment_t));
+    if (snapshot)
+        memcpy(snapshot, mgr->segments,
+               (size_t)snapshot_count * sizeof(segment_t));
+    LeaveCriticalSection(&mgr->lock);
+    if (!snapshot) {
+        CloseHandle(hFile); DeleteFileW(wtmp_path);
+        trace("persist: snapshot allocation failed"); return -1;
+    }
+    qsort(snapshot, (size_t)snapshot_count, sizeof(segment_t),
+          compare_segment_offsets);
+
     /* Write header */
     persist_header_t hdr;
     memset(&hdr, 0, sizeof(hdr));
     hdr.magic = PERSIST_MAGIC;
     hdr.version = PERSIST_VERSION;
     hdr.file_size = file_size;
-    hdr.segment_count = mgr->segment_count;
+    hdr.segment_count = snapshot_count;
     hdr.thread_count = thread_count;
     hdr.timestamp = GetTickCount64();
     if (validator)
         snprintf(hdr.validator, sizeof(hdr.validator), "%s", validator);
 
     if (!WriteFile(hFile, &hdr, sizeof(hdr), &written, NULL) || written != sizeof(hdr)) {
+        free(snapshot);
         CloseHandle(hFile); DeleteFileW(wtmp_path);
         trace("persist: header write failed"); return -1;
     }
 
     /* Write segments */
-    EnterCriticalSection(&mgr->lock);
-    for (int i = 0; i < mgr->segment_count; i++) {
-        segment_t* s = &mgr->segments[i];
+    for (int i = 0; i < snapshot_count; i++) {
+        segment_t* s = &snapshot[i];
         persist_segment_t ps;
         memset(&ps, 0, sizeof(ps));
         ps.index = s->index;
@@ -152,12 +177,12 @@ int persist_save(const char* path, segment_manager_t* mgr, int64_t file_size,
         ps.crc32 = s->crc32;
 
         if (!WriteFile(hFile, &ps, sizeof(ps), &written, NULL) || written != sizeof(ps)) {
-            LeaveCriticalSection(&mgr->lock);
+            free(snapshot);
             CloseHandle(hFile); DeleteFileW(wtmp_path);
             trace("persist: segment write failed"); return -1;
         }
     }
-    LeaveCriticalSection(&mgr->lock);
+    free(snapshot);
 
     CloseHandle(hFile);
 
@@ -168,7 +193,7 @@ int persist_save(const char* path, segment_manager_t* mgr, int64_t file_size,
         return -1;
     }
 
-    trace("persist: saved %d segments to %s", mgr->segment_count, path);
+    trace("persist: saved %d segments to %s", snapshot_count, path);
     return 0;
 }
 
@@ -226,7 +251,8 @@ int persist_load(const char* path, segment_manager_t* mgr, int64_t file_size,
     mgr->file_size = file_size;
     mgr->pending_capacity = seg_count + 4;
     mgr->pending_queue = (int*)calloc(mgr->pending_capacity, sizeof(int));
-    mgr->segments = (segment_t*)calloc(seg_count, sizeof(segment_t));
+    mgr->segment_capacity = MAX_SEGMENT_COUNT;
+    mgr->segments = (segment_t*)calloc(mgr->segment_capacity, sizeof(segment_t));
     if (!mgr->segments || !mgr->pending_queue) {
         CloseHandle(hFile); return -1;
     }

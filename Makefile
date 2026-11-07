@@ -31,7 +31,7 @@ clean:
 	-$(RM) $(RM_TARGETS)
 
 unit-test:
-	$(CC) $(CFLAGS) -I. -o tests/test_segment.exe tests/test_segment.c segment.c utils.c -lws2_32
+	$(CC) $(CFLAGS) -I. -o tests/test_segment.exe tests/test_segment.c segment.c persist.c utils.c -lws2_32
 	./tests/test_segment.exe
 	$(CC) $(CFLAGS) -I. -o tests/test_options.exe tests/test_options.c options.c url.c utils.c -lws2_32
 	./tests/test_options.exe

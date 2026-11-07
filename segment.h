@@ -6,6 +6,7 @@
 #include <windows.h>
 
 #define MIN_SEGMENT_SIZE (1024 * 1024)  /* 1MB minimum per segment */
+#define MAX_SEGMENT_COUNT 1024
 
 typedef enum {
     SEG_PENDING,
@@ -32,6 +33,7 @@ typedef struct {
 typedef struct {
     segment_t* segments;
     int        segment_count;
+    int        segment_capacity;
     int        total_size;      /* sum of all segment byte sizes */
     int        active_count;
     int        worker_limit;    /* hard cap for concurrent acquired segments */
@@ -63,6 +65,9 @@ segment_t* segmgr_acquire_pending(segment_manager_t* mgr);
 
 /* Split pending resume work before workers start, up to target_count. */
 int segmgr_expand_pending(segment_manager_t* mgr, int target_count);
+
+/* Split the largest active range and enqueue its untouched tail. */
+int segmgr_split_largest_active(segment_manager_t* mgr);
 
 /* Set the maximum number of segments that may be acquired concurrently. */
 void segmgr_set_worker_limit(segment_manager_t* mgr, int worker_limit);

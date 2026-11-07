@@ -63,11 +63,11 @@ static int download_from_source(worker_ctx_t* ctx, segment_t* seg,
                                 char* buf) {
     int tid = ctx->thread_id;
     segment_manager_t* mgr = ctx->segmgr;
-    int64_t seg_len = seg->end_offset - seg->start_offset + 1;
     int64_t request_start = seg->start_offset + seg->downloaded;
+    int64_t request_end = seg->end_offset;
     char range_start[32], range_end[32];
     snprintf(range_start, sizeof(range_start), "%lld", (long long)request_start);
-    snprintf(range_end, sizeof(range_end), "%lld", (long long)seg->end_offset);
+    snprintf(range_end, sizeof(range_end), "%lld", (long long)request_end);
 
     http_client_t http;
     if (http_connect(&http, source->url, ctx->timeout_sec, ctx->proxy,
@@ -105,7 +105,7 @@ static int download_from_source(worker_ctx_t* ctx, segment_t* seg,
     }
 
     if (resp.content_range_start != request_start ||
-        resp.content_range_end != seg->end_offset ||
+        resp.content_range_end != request_end ||
         resp.content_range_total != mgr->file_size) {
         source_failure(source, true, ctx->source_count > 1, tid, source_index,
                        "unexpected Content-Range");
@@ -143,7 +143,10 @@ static int download_from_source(worker_ctx_t* ctx, segment_t* seg,
             return 3;
         }
 
-        int64_t remaining = seg_len - downloaded;
+        EnterCriticalSection(&mgr->lock);
+        int64_t current_end = seg->end_offset;
+        LeaveCriticalSection(&mgr->lock);
+        int64_t remaining = current_end - seg->start_offset + 1 - downloaded;
         if (remaining <= 0) break;
         int read_size = remaining < WORK_BUF_SIZE ? (int)remaining : WORK_BUF_SIZE;
         int bytes = http_read_body(&http, buf, read_size);
@@ -205,6 +208,12 @@ DWORD WINAPI worker_thread_func(LPVOID param) {
         if (!seg) {
             if (segmgr_all_done(mgr) || segmgr_has_error(mgr)) break;
             if (segmgr_retry_expired(mgr) > 0) continue;
+            int split = segmgr_split_largest_active(mgr);
+            if (split > 0) continue;
+            if (split < 0) {
+                segmgr_abort(mgr);
+                break;
+            }
             EnterCriticalSection(&mgr->lock);
             SleepConditionVariableCS(&mgr->cv_new_work, &mgr->lock, 1000);
             LeaveCriticalSection(&mgr->lock);

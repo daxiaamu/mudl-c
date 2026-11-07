@@ -57,7 +57,8 @@ int segmgr_init(segment_manager_t* mgr, int64_t file_size, int max_connections) 
     mgr->pending_queue = (int*)calloc(mgr->pending_capacity, sizeof(int));
     if (!mgr->pending_queue) return -1;
 
-    mgr->segments = (segment_t*)calloc(seg_count, sizeof(segment_t));
+    mgr->segment_capacity = MAX_SEGMENT_COUNT;
+    mgr->segments = (segment_t*)calloc(mgr->segment_capacity, sizeof(segment_t));
     if (!mgr->segments) { free(mgr->pending_queue); return -1; }
 
     /* Initial segmentation: equal chunks */
@@ -193,13 +194,10 @@ int segmgr_expand_pending(segment_manager_t* mgr, int target_count) {
         if (best_idx < 0) break;
 
         int old_count = mgr->segment_count;
-        segment_t* grown = (segment_t*)realloc(
-            mgr->segments, (size_t)(old_count + 1) * sizeof(segment_t));
-        if (!grown) {
+        if (old_count >= mgr->segment_capacity) {
             LeaveCriticalSection(&mgr->lock);
             return -1;
         }
-        mgr->segments = grown;
 
         memmove(&mgr->segments[best_idx + 2],
                 &mgr->segments[best_idx + 1],
@@ -243,6 +241,63 @@ int segmgr_expand_pending(segment_manager_t* mgr, int target_count) {
 
     LeaveCriticalSection(&mgr->lock);
     return pending_count;
+}
+
+int segmgr_split_largest_active(segment_manager_t* mgr) {
+    EnterCriticalSection(&mgr->lock);
+
+    if (mgr->segment_count >= mgr->segment_capacity) {
+        LeaveCriticalSection(&mgr->lock);
+        return 0;
+    }
+
+    int best_idx = -1;
+    int64_t best_remaining = 0;
+    for (int i = 0; i < mgr->segment_count; i++) {
+        segment_t* s = &mgr->segments[i];
+        if (s->state != SEG_DOWNLOADING) continue;
+        int64_t remaining = s->end_offset - s->start_offset + 1 - s->downloaded;
+        if (remaining >= 2LL * MIN_SEGMENT_SIZE && remaining > best_remaining) {
+            best_idx = i;
+            best_remaining = remaining;
+        }
+    }
+
+    if (best_idx < 0) {
+        LeaveCriticalSection(&mgr->lock);
+        return 0;
+    }
+
+    segment_t* original = &mgr->segments[best_idx];
+    int64_t old_end = original->end_offset;
+    int64_t split_start = original->start_offset + original->downloaded
+                        + best_remaining / 2;
+    original->end_offset = split_start - 1;
+
+    int added_idx = mgr->segment_count;
+    segment_t* added = &mgr->segments[added_idx];
+    memset(added, 0, sizeof(*added));
+    added->index = added_idx;
+    added->start_offset = split_start;
+    added->end_offset = old_end;
+    added->state = SEG_PENDING;
+    added->socket_fd = -1;
+    mgr->segment_count++;
+
+    if (pending_enqueue_locked(mgr, added_idx) != 0) {
+        mgr->segment_count--;
+        original->end_offset = old_end;
+        memset(added, 0, sizeof(*added));
+        LeaveCriticalSection(&mgr->lock);
+        return -1;
+    }
+
+    trace("Split active segment %d at %lld; queued segment %d (%lld-%lld)",
+          best_idx, (long long)split_start, added_idx,
+          (long long)added->start_offset, (long long)added->end_offset);
+    LeaveCriticalSection(&mgr->lock);
+    WakeConditionVariable(&mgr->cv_new_work);
+    return 1;
 }
 
 void segmgr_complete(segment_manager_t* mgr, segment_t* seg) {

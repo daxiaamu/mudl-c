@@ -5,6 +5,7 @@ import struct
 import subprocess
 import tempfile
 import threading
+import time
 import urllib.parse
 import zlib
 
@@ -12,6 +13,7 @@ import zlib
 DATA = bytes(range(256)) * 8192
 FLAKY_DATA = DATA * 17
 EXPAND_DATA = DATA * 8
+BALANCE_DATA = DATA * 8
 DIFFERENT_DATA = b"X" + DATA[1:]
 
 
@@ -41,7 +43,28 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         try:
             self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError):
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
+
+    def _unbalanced_range(self):
+        value = self.headers.get("Range", "bytes=0-")[6:]
+        start_text, end_text = value.split("-", 1)
+        start = int(start_text)
+        end = int(end_text) if end_text else len(BALANCE_DATA) - 1
+        body = BALANCE_DATA[start : end + 1]
+        self.send_response(206)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header(
+            "Content-Range", f"bytes {start}-{end}/{len(BALANCE_DATA)}")
+        self.send_header("ETag", '"unbalanced"')
+        self.end_headers()
+        try:
+            for offset in range(0, len(body), 65536):
+                self.wfile.write(body[offset : offset + 65536])
+                self.wfile.flush()
+                if start == 0:
+                    time.sleep(0.004)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             pass
 
     def do_GET(self):
@@ -86,6 +109,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 pass
         elif self.path == "/expand":
             self._range('"expand"', data=EXPAND_DATA)
+        elif self.path == "/unbalanced":
+            self._unbalanced_range()
         elif self.path == "/redirect-loop":
             self.send_response(302)
             self.send_header(
@@ -197,6 +222,15 @@ def main():
             assert HTTPProxy.seen[0].startswith(base + "/range"), HTTPProxy.seen[0]
             assert hashlib.sha256(
                 (temp / "proxy-range.bin").read_bytes()).digest() == expected
+
+            before = Handler.counts.get("/unbalanced", 0)
+            result = run(mudl, temp, base + "/unbalanced", "unbalanced.bin",
+                         "-c", "4", timeout=20)
+            requests = Handler.counts.get("/unbalanced", 0) - before
+            assert result.returncode == 0, result.stderr.decode(errors="replace")
+            assert requests > 5, f"idle workers did not split active ranges: {requests} requests"
+            assert hashlib.sha256((temp / "unbalanced.bin").read_bytes()).digest() == \
+                   hashlib.sha256(BALANCE_DATA).digest()
 
             command = [str(mudl), "-d", str(temp), "-o", "mirrors.bin",
                        "-c", "8", "--progress", "none",

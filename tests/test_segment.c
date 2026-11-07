@@ -1,4 +1,5 @@
 #include "segment.h"
+#include "persist.h"
 #include "utils.h"
 
 #include <assert.h>
@@ -92,6 +93,54 @@ static void test_worker_limit_survives_retries(void) {
     segmgr_destroy(&mgr);
 }
 
+static void test_idle_worker_splits_active_tail(void) {
+    segment_manager_t mgr;
+    assert(segmgr_init(&mgr, 64LL * 1024 * 1024, 4) == 0);
+
+    segment_t* active[4];
+    for (int i = 0; i < 4; i++) {
+        active[i] = segmgr_acquire_pending(&mgr);
+        assert(active[i] != NULL);
+    }
+    assert(segmgr_acquire_pending(&mgr) == NULL);
+
+    segmgr_complete(&mgr, active[0]);
+    assert(mgr.active_count == 3);
+    int64_t old_end = active[1]->end_offset;
+    assert(segmgr_split_largest_active(&mgr) == 1);
+    assert(mgr.segment_count == 5);
+
+    segment_t* stolen = segmgr_acquire_pending(&mgr);
+    assert(stolen != NULL);
+    assert(stolen->start_offset == active[1]->end_offset + 1);
+    assert(stolen->end_offset == old_end);
+    assert(stolen->downloaded == 0);
+    assert(mgr.active_count == 4);
+
+    segmgr_destroy(&mgr);
+}
+
+static void test_runtime_split_persists_in_offset_order(void) {
+    const char* path = "test-runtime-split.segments";
+    const char* validator = "etag:test-runtime-split";
+    segment_manager_t mgr;
+    assert(segmgr_init(&mgr, 64LL * 1024 * 1024, 4) == 0);
+    for (int i = 0; i < 4; i++)
+        assert(segmgr_acquire_pending(&mgr) != NULL);
+    assert(segmgr_split_largest_active(&mgr) == 1);
+    assert(persist_save(path, &mgr, mgr.file_size, 4, validator) == 0);
+
+    segment_manager_t loaded;
+    memset(&loaded, 0, sizeof(loaded));
+    assert(persist_load(path, &loaded, mgr.file_size, NULL, validator) == 0);
+    assert(loaded.segment_count == 5);
+    assert_contiguous(&loaded);
+
+    segmgr_destroy(&loaded);
+    segmgr_destroy(&mgr);
+    persist_remove(path);
+}
+
 static void test_crc32_combine(void) {
     const char first[] = "resume ";
     const char second[] = "download";
@@ -148,6 +197,8 @@ int main(void) {
     test_expand_partial_resume();
     test_completed_segments_are_not_requeued();
     test_worker_limit_survives_retries();
+    test_idle_worker_splits_active_tail();
+    test_runtime_split_persists_in_offset_order();
     test_crc32_combine();
     test_compact_completed_prefix_before_expand();
     puts("segment unit tests passed");
