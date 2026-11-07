@@ -46,7 +46,7 @@ The Release contains two executable builds, one for each architecture.
 
 | Feature | Description |
 |---------|-------------|
-| Multi-thread downloads | Parallel HTTP range downloads, up to 32 connections |
+| Multi-thread downloads | Up to 32 connections with runtime range splitting to keep idle workers busy |
 | Multiple sources | Downloads one file from up to 16 mirror URLs with automatic failover |
 | Strict resume | Validates segment CRC32 plus the remote ETag/Last-Modified identity |
 | Signed URLs | Handles long redirect URLs used by cloud/CDN signed links |

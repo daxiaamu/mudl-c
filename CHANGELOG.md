@@ -2,6 +2,15 @@
 
 All notable changes to MUDL-C are documented in this file.
 
+## [0.5.15] - 2026-11-08
+
+### Fixed
+
+- Kept the configured connection count active by dynamically splitting the
+  largest unfinished range when a worker becomes idle.
+- Preserved strict resume validation by saving dynamically split ranges in
+  file-offset order.
+
 ## [0.5.14] - 2026-10-13
 
 ### Fixed
@@ -101,6 +110,7 @@ All notable changes to MUDL-C are documented in this file.
 - Resume speed reporting and final summaries to follow aria2-style semantics.
 - Early EOF, disk short-write, and malformed partial-response handling.
 
+[0.5.15]: https://github.com/daxiaamu/mudl-c/compare/v0.5.14...v0.5.15
 [0.5.14]: https://github.com/daxiaamu/mudl-c/compare/v0.5.13...v0.5.14
 [0.5.13]: https://github.com/daxiaamu/mudl-c/compare/v0.5.12...v0.5.13
 [0.5.12]: https://github.com/daxiaamu/mudl-c/compare/v0.5.11...v0.5.12
