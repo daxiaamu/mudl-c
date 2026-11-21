@@ -424,6 +424,7 @@ int http_request(http_client_t* cli, http_method_t method,
 
         if (_strnicmp(line, "Content-Length:", 15) == 0) {
             resp->content_length = atoll(line + 15);
+            resp->has_content_length = true;
         }
         else if (_strnicmp(line, "Content-Range:", 14) == 0) {
             long long s, e, t;

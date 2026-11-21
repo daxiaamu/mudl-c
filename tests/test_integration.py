@@ -15,6 +15,7 @@ FLAKY_DATA = DATA * 17
 EXPAND_DATA = DATA * 8
 BALANCE_DATA = DATA * 8
 DIFFERENT_DATA = b"X" + DATA[1:]
+SMALL_DATA = b"small fixed response\n"
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -137,6 +138,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(b"0\r\n\r\n")
             except (BrokenPipeError, ConnectionResetError):
                 pass
+        elif self.path == "/small-delayed-close":
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(SMALL_DATA)))
+            self.send_header("ETag", '"small-delayed-close"')
+            self.end_headers()
+            try:
+                self.wfile.write(SMALL_DATA)
+                self.wfile.flush()
+                time.sleep(4)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
         else:
             self.send_response(404)
             self.send_header("Content-Length", "0")
@@ -222,6 +234,15 @@ def main():
             assert HTTPProxy.seen[0].startswith(base + "/range"), HTTPProxy.seen[0]
             assert hashlib.sha256(
                 (temp / "proxy-range.bin").read_bytes()).digest() == expected
+
+            started = time.monotonic()
+            result = run(
+                mudl, temp, base + "/small-delayed-close", "small.bin",
+                "-c", "1", "--retries", "0", timeout=8)
+            elapsed = time.monotonic() - started
+            assert result.returncode == 0, result.stderr.decode(errors="replace")
+            assert (temp / "small.bin").read_bytes() == SMALL_DATA
+            assert elapsed < 2.5, f"waited for connection close: {elapsed:.2f}s"
 
             before = Handler.counts.get("/unbalanced", 0)
             result = run(mudl, temp, base + "/unbalanced", "unbalanced.bin",

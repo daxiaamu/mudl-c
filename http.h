@@ -30,6 +30,7 @@ typedef enum {
 typedef struct {
     int         status_code;
     int64_t     content_length;
+    bool        has_content_length;
     int64_t     content_range_start;
     int64_t     content_range_end;
     int64_t     content_range_total;

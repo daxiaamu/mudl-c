@@ -459,6 +459,16 @@ retry_download:;
     if (!buf) { file_close(&f); http_close(&cli); return 1; }
 
     int64_t downloaded = resume_pos;
+    int64_t expected_downloaded = -1;
+    if (!get_resp.is_chunked) {
+        if (get_resp.status_code == 206 &&
+            get_resp.content_range_end >= resume_pos) {
+            expected_downloaded = get_resp.content_range_end + 1;
+        } else if (get_resp.status_code == 200 &&
+                   get_resp.has_content_length) {
+            expected_downloaded = get_resp.content_length;
+        }
+    }
     uint32_t download_crc32 = resume_crc32;
     bool download_error = false;
     bool retryable_error = false;
@@ -468,7 +478,16 @@ retry_download:;
     uint64_t last_save_ms = GetTickCount64();
 
     while (!g_interrupted) {
-        int bytes = http_read_body(&cli, buf, BUF_SIZE);
+        if (expected_downloaded >= 0 && downloaded >= expected_downloaded)
+            break;
+
+        int read_size = BUF_SIZE;
+        if (expected_downloaded >= 0) {
+            int64_t remaining = expected_downloaded - downloaded;
+            if (remaining < read_size)
+                read_size = (int)remaining;
+        }
+        int bytes = http_read_body(&cli, buf, read_size);
         if (bytes < 0) {
             snprintf(transfer_error, sizeof(transfer_error), "%s", cli.last_error);
             download_error = true;

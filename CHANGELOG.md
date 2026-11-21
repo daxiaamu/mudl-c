@@ -2,6 +2,16 @@
 
 All notable changes to MUDL-C are documented in this file.
 
+## [0.5.16] - 2026-11-22
+
+### Fixed
+
+- Stopped single-thread downloads as soon as the complete `Content-Length`
+  body has been received instead of waiting for the server to close a
+  keep-alive connection.
+- Prevented complete small HTTPS responses from being misreported as SChannel
+  receive failures while retaining strict incomplete-download detection.
+
 ## [0.5.15] - 2026-11-08
 
 ### Fixed
@@ -110,6 +120,7 @@ All notable changes to MUDL-C are documented in this file.
 - Resume speed reporting and final summaries to follow aria2-style semantics.
 - Early EOF, disk short-write, and malformed partial-response handling.
 
+[0.5.16]: https://github.com/daxiaamu/mudl-c/compare/v0.5.15...v0.5.16
 [0.5.15]: https://github.com/daxiaamu/mudl-c/compare/v0.5.14...v0.5.15
 [0.5.14]: https://github.com/daxiaamu/mudl-c/compare/v0.5.13...v0.5.14
 [0.5.13]: https://github.com/daxiaamu/mudl-c/compare/v0.5.12...v0.5.13
